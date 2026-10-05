@@ -125,6 +125,24 @@ pattern-matched the attack. For real-model play:
 | 4 | deny-list over the **raw bytes**, no Unicode normalisation (blocked path still proofreads) | VOLT normalises confusables/fullwidth/reversed/mixed-script first, then obeys the corrected text |
 | 5 | anchor guard: full scan of short inputs; head/tail-band scan of long ones | the middle band of an oversized payload is only defended by VOLT's attention |
 
+Levels 6-10 defend with architecture rather than input filters. They run
+multi-model pipelines (`backend/app/pipeline.py`); the flag is interpolated
+only into the one component meant to hold it, and the win is still the
+player's flag surfacing in the final model output.
+
+| L | Pipeline | The gap (by design) |
+|---|---|---|
+| 6 | validator model classifies SAFE/UNSAFE; SAFE forwards verbatim to a target model holding the flag | the two models read the same message differently: a wrapper (translation/quote/comment) reads benign to the validator but still executes on the target |
+| 7 | execution model (holds flag) then a compliance model that redacts recognisable secret formats | compliance pattern-matches; an encoded flag (hex/base64/reversed) reads as prose and passes, and the transform-aware detector still reconstructs it |
+| 8 | stateful memory: a preference stored in one session loads into later sessions as trusted context | memory written by the current conversation is inert; a later session loads the poisoned preference and a benign trigger fires it. Reset wipes memory; New chat keeps it |
+| 9 | agent proposes an action; a reviewer decision engine approves from a dashboard rendered in a sandboxed iframe | the dashboard shows the destination as typed (Markdown-link text, confusable homoglyphs), so a destination can display internal while routing externally |
+| 10 | four agents (Scout, Analyst, Commander, Publisher), separate calls/contexts/permissions; only Commander holds the flag | provenance is typed metadata, but the Analyst's combined recommendation is stamped OFFICIAL, which Commander acts on; content grows more trusted as it moves between agents |
+
+Memory items (Level 8) carry `source_conversation_id`; an item is active only
+in conversations other than the one that wrote it (delayed activation), and
+`challenge_memory` rows are scoped to (user, scope, challenge). The reset route
+wipes that scope's memory; the new-chat route does not.
+
 ## Calibration
 
 Targets (provisional gameplay targets): intended-solution success >= 80%

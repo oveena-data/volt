@@ -77,6 +77,7 @@ export interface Challenge {
   number: number
   title: string
   subtitle: string
+  overview?: string
   points: number
   version: number
   available: boolean
@@ -118,7 +119,7 @@ export interface SessionState {
   event_id: string | null
   generation: number
   challenge: {
-    title: string; subtitle: string; starter: string | null
+    title: string; subtitle: string; overview?: string; starter: string | null
     points: number; version: number
   }
   messages: Message[]

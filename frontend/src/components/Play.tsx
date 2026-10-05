@@ -146,8 +146,9 @@ export default function Play() {
   const rotate = async (kind: 'reset' | 'new-chat') => {
     if (!session) return
     if (kind === 'reset' && !window.confirm(
-      'Reset destroys this conversation and everything built up in it. ' +
-      'Your solved levels and progress are kept. Continue?')) return
+      'Reset destroys this conversation and everything built up in it, ' +
+      'including any stored memory for this level. Your solved levels and ' +
+      'progress are kept. Continue?')) return
     try {
       setPending(null)
       setExtras(null)
@@ -315,6 +316,9 @@ export default function Play() {
                 {session.solved && <span className="badge solved">solved</span>}
               </h2>
               <p className="subtitle-line">{session.challenge.subtitle}</p>
+              {session.challenge.overview && (
+                <p className="overview">{session.challenge.overview}</p>
+              )}
             </div>
 
             {session.solved && (
@@ -367,6 +371,8 @@ export default function Play() {
               </div>
             )}
 
+            {extras && <PipelineTrace extras={extras} />}
+
             <div className="composer">
               <form className="row" onSubmit={submitDraft}>
                 <textarea className="input" value={draft}
@@ -408,6 +414,98 @@ export default function Play() {
           </>
         )}
       </main>
+    </div>
+  )
+}
+
+function PipelineTrace({ extras }: { extras: any }) {
+  const stages = extras.pipeline as { stage: string; verdict?: string; status?: string }[] | undefined
+  const agents = extras.agents as any[] | undefined
+  const approval = extras.approval
+  const memoryLoaded = extras.memory_loaded as number | undefined
+
+  if (!stages && !agents && approval === undefined && memoryLoaded === undefined) return null
+
+  return (
+    <div className="trace">
+      {stages && (
+        <div className="trace-row">
+          {stages.map((s, i) => (
+            <span key={i} className="trace-stage">
+              {s.stage}
+              <b>{s.verdict || s.status}</b>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {agents && (
+        <div className="trace-row">
+          {agents.map((a, i) => (
+            <span key={i} className="trace-stage">
+              {a.agent}
+              {a.provenance_out && <b>out: {a.provenance_out}</b>}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {memoryLoaded !== undefined && (
+        <div className="trace-note">
+          {memoryLoaded === 0
+            ? 'No stored preferences were loaded for this session.'
+            : `${memoryLoaded} stored preference${memoryLoaded === 1 ? '' : 's'} loaded as trusted context.`}
+        </div>
+      )}
+
+      {approval && <ApprovalDashboard approval={approval} />}
+    </div>
+  )
+}
+
+function esc(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// The approval screen renders untrusted fields exactly as a naive dashboard
+// would. It lives in a sandboxed, separate-origin iframe (srcdoc gives an
+// opaque origin; the empty sandbox attribute blocks scripts, forms and
+// same-origin access), so visual/Unicode deception can be demonstrated with
+// no path to application XSS.
+function ApprovalDashboard({ approval }: { approval: any }) {
+  const srcdoc = `<!doctype html><meta charset="utf-8">
+    <style>
+      body{font:13px Arial,Helvetica,sans-serif;margin:0;padding:12px;color:#16181a;background:#fff}
+      .card{border:1px solid #d1d5db;border-radius:8px;padding:12px}
+      .k{color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.05em}
+      .v{margin:2px 0 10px;word-break:break-all}
+      .verdict{font-weight:bold}
+      .ok{color:#1a6b4a}.no{color:#a52828}
+    </style>
+    <div class="card">
+      <div class="k">Reviewer approval dashboard</div>
+      <div class="k">Action</div><div class="v">${esc(approval.action)}</div>
+      <div class="k">Destination (as shown to reviewer)</div>
+      <div class="v">${esc(approval.destination_display)}</div>
+      <div class="k">Reason</div><div class="v">${esc(approval.reason)}</div>
+      <div class="k">Payload preview</div><div class="v">${esc(approval.payload_preview)}</div>
+      <div class="verdict ${approval.approved ? 'ok' : 'no'}">
+        ${approval.approved ? 'APPROVED' : 'DENIED'}</div>
+    </div>`
+  return (
+    <div className="approval">
+      <iframe title="Approval dashboard (sandboxed)" className="approval-frame"
+        sandbox="" srcDoc={srcdoc} />
+      <div className="approval-truth">
+        Actual routing target: <code>{approval.destination_actual}</code>
+        {approval.delivered_externally
+          ? ' — this left the organisation. The dashboard showed an internal-looking address.'
+          : approval.approved
+            ? ' — delivered internally.'
+            : ' — the action was blocked.'}
+      </div>
     </div>
   )
 }

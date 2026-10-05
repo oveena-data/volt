@@ -26,12 +26,12 @@ from datetime import datetime, timezone
 
 import asyncpg
 
-from . import providers, scoring
-from .challenges.filters import apply_input_filters, apply_output_filters
+from . import pipeline, providers, scoring
+from .challenges.filters import apply_input_filters
 from .challenges.seed import load_published_version
 from .config import settings
 from .errors import ApiError
-from .flags import contains_flag, get_or_create_flag, submission_matches
+from .flags import get_or_create_flag, submission_matches
 
 PRACTICE = "practice"
 
@@ -190,9 +190,60 @@ async def owned_game_session(
     return dict(row)
 
 
-async def rotate_conversation(conn: asyncpg.Connection, game_session_id: str) -> dict:
-    """Deactivate the active conversation and start a fresh one (used by both
-    reset and new-chat; levels 6+ will differ on persistent memory)."""
+async def active_memory(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str,
+    current_conversation_id: str | None,
+) -> list[str]:
+    """Memory items for this (user, scope, challenge) that are ACTIVE now:
+    everything stored by an EARLIER conversation. Items written by the current
+    conversation are excluded, so a preference only activates in a later
+    session (Level 8's delayed activation)."""
+    rows = await conn.fetch(
+        """SELECT content FROM challenge_memory
+           WHERE user_id=$1 AND scope=$2 AND challenge_id=$3
+             AND ($4::uuid IS NULL OR source_conversation_id <> $4::uuid)
+           ORDER BY created_at""",
+        user_id, scope, challenge_id, current_conversation_id,
+    )
+    return [r["content"] for r in rows]
+
+
+async def store_memory(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str,
+    conversation_id: str, content: str,
+) -> None:
+    await conn.execute(
+        """INSERT INTO challenge_memory(user_id, scope, challenge_id,
+                                        source_conversation_id, content)
+           VALUES($1,$2,$3,$4,$5)""",
+        user_id, scope, challenge_id, conversation_id, content,
+    )
+
+
+async def wipe_memory(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str,
+) -> None:
+    await conn.execute(
+        """DELETE FROM challenge_memory
+           WHERE user_id=$1 AND scope=$2 AND challenge_id=$3""",
+        user_id, scope, challenge_id,
+    )
+
+
+async def rotate_conversation(conn: asyncpg.Connection, game_session_id: str,
+                              *, wipe_memory_too: bool = False) -> dict:
+    """Deactivate the active conversation and start a fresh one.
+
+    Used by both reset and new-chat. They differ only for memory-backed levels
+    (Level 8): 'reset' wipes persistent memory, 'new chat' keeps it. The memory
+    wipe is scoped to this game session's (user, scope, challenge)."""
+    if wipe_memory_too:
+        gs = await conn.fetchrow(
+            "SELECT user_id, scope, challenge_id FROM game_sessions WHERE id=$1",
+            game_session_id)
+        if gs is not None:
+            await wipe_memory(conn, str(gs["user_id"]), gs["scope"],
+                              gs["challenge_id"])
     async with conn.transaction():
         old = await conn.fetchrow(
             """SELECT id, generation FROM conversations
@@ -417,6 +468,16 @@ async def play_turn(
                        VALUES($1,$2,'pending',$3,$4) RETURNING id""",
                     gs["conversation_id"], client_msg_id, user_msg_id, access.version,
                 )
+                # Memory-backed levels: the deterministic memory writer stores a
+                # durable preference now. It only decides what is STORED; an item
+                # is not active until a LATER conversation loads it (delayed
+                # activation), so storing here never self-triggers this turn.
+                if access.config.get("engine") == "memory":
+                    pref = pipeline.detect_preference(text)
+                    if pref:
+                        await store_memory(
+                            conn, user_id, access.scope, access.challenge_id,
+                            gs["conversation_id"], pref)
 
         # ---------- input filters (no model call if blocked) ----------
         filters = access.config.get("filters", {})
@@ -450,24 +511,23 @@ async def play_turn(
 
         # ---------- build model context ----------
         flag = await get_or_create_flag(conn, user_id, access.scope, access.challenge_id)
-        system_prompt = access.config["system_prompt"].replace("{flag}", flag)
         history = await conn.fetch(
             """SELECT role, content FROM messages
                WHERE conversation_id=$1 AND in_context AND role IN ('user','assistant')
                ORDER BY seq""",
             gs["conversation_id"],
         )
+        history = [{"role": r["role"], "content": r["content"]} for r in history]
+        memory = []
+        if access.config.get("engine") == "memory":
+            memory = await active_memory(
+                conn, user_id, access.scope, access.challenge_id,
+                gs["conversation_id"])
     # pool connection released here — nothing is held during inference
 
-    msgs = [{"role": "system", "content": system_prompt}]
-    msgs += [{"role": r["role"], "content": r["content"]} for r in history]
-    mp = access.config.get("model_params", {})
     try:
-        result = await providers.generate(
-            msgs,
-            temperature=mp.get("temperature"),
-            max_tokens=mp.get("max_tokens"),
-        )
+        reply = await pipeline.produce_reply(
+            access.config, flag, history, text, memory=memory)
     except providers.QueueFullError as e:
         await _fail_turn(pool, turn_id, user_msg_id, "queue_full")
         raise ApiError(str(e), 429, code="queue_full")
@@ -481,9 +541,6 @@ async def play_turn(
                                          "the same message.",
                            tokens=stats["tokens"], attempts=stats["attempts"])
 
-    visible = apply_output_filters(filters.get("output", []), result.text)
-    leaked = contains_flag(visible, flag)
-
     # ---------- tx2: persist outcome ----------
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -495,28 +552,30 @@ async def play_turn(
                 """INSERT INTO messages(conversation_id, seq, role, content,
                                         visible_content)
                    VALUES($1,$2,'assistant',$3,$4) RETURNING id""",
-                gs["conversation_id"], seq, result.text, visible,
+                gs["conversation_id"], seq, reply.raw_text, reply.visible_text,
             )
             await conn.execute(
                 """UPDATE turns SET status='done', reply_message_id=$2, leaked=$3,
                        prompt_tokens=$4, completion_tokens=$5, latency_ms=$6,
                        model=$7, finished_at=now()
                    WHERE id=$1""",
-                turn_id, reply_id, leaked, result.prompt_tokens,
-                result.completion_tokens, result.latency_ms, result.model,
+                turn_id, reply_id, reply.leaked, reply.prompt_tokens,
+                reply.completion_tokens, reply.latency_ms, reply.model,
             )
         solve = None
-        if leaked:
+        if reply.leaked:
             solve = await _record_solve(conn, user_id, access, "auto", turn_id)
         stats = await conversation_stats(conn, gs["conversation_id"])
         solved = await scope_solved(conn, user_id, access.scope, access.challenge_id)
+        extras = dict(reply.extras)
+        extras.update(await _extras(conn, access, gs))
         return TurnOutcome(
-            status="done", reply=visible, leaked=leaked,
+            status="done", reply=reply.visible_text, leaked=reply.leaked,
             solved=solved is not None, solve=solve,
             tokens=stats["tokens"], attempts=stats["attempts"],
-            turn_tokens=result.prompt_tokens + result.completion_tokens,
-            latency_ms=result.latency_ms,
-            extras=await _extras(conn, access, gs),
+            turn_tokens=reply.prompt_tokens + reply.completion_tokens,
+            latency_ms=reply.latency_ms,
+            extras=extras,
         )
 
 

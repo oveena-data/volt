@@ -229,6 +229,35 @@ label.field > span {
 }
 .fragments b { color: var(--text); }
 
+.overview {
+  margin: 10px 0 0; font-size: 13px; color: var(--text-dim);
+  border-top: 1px solid var(--border); padding-top: 10px;
+}
+
+.trace { padding: 8px 22px 0; }
+.trace-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.trace-stage {
+  display: inline-flex; gap: 6px; align-items: center;
+  font-size: 12px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  background: var(--surface);
+}
+.trace-stage b { color: var(--accent); font-weight: 700; }
+.trace-note { font-size: 12.5px; color: var(--text-dim); margin: 2px 0 6px; }
+
+.approval { padding: 4px 0 2px; }
+.approval-frame {
+  width: 100%; height: 230px; border: 1px solid var(--border);
+  border-radius: 8px; background: #fff;
+}
+.approval-truth {
+  font-size: 12.5px; color: var(--text-dim); margin-top: 6px;
+}
+.approval-truth code {
+  background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); word-break: break-all;
+}
+
 .composer {
   border-top: 1px solid var(--border); padding: 14px 22px 16px;
   background: var(--surface-2);

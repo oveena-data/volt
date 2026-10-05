@@ -110,9 +110,10 @@ function CreateEvent({ onDone, onErr }:
         ends_at: new Date(form.ends_at).toISOString(),
       }
       const r = await api.post('/api/admin/events', body)
-      // sensible default: offer all five levels at their escalating defaults
+      // sensible default: offer all ten levels at their escalating defaults
       const defaults: [string, number][] = [
-        ['l1', 100], ['l2', 200], ['l3', 350], ['l4', 550], ['l5', 800]]
+        ['l1', 100], ['l2', 200], ['l3', 350], ['l4', 550], ['l5', 800],
+        ['l6', 1100], ['l7', 1500], ['l8', 2000], ['l9', 2600], ['l10', 3500]]
       for (const [cid, pts] of defaults) {
         await api.post(`/api/admin/events/${r.id}/challenges`,
           { challenge_id: cid, points: pts })
@@ -148,7 +149,7 @@ function CreateEvent({ onDone, onErr }:
         {' '}Invite-only
       </label>
       <button className="btn primary">
-        Create event (levels 1-5 at default points)
+        Create event (levels 1-10 at default points)
       </button>
     </form>
   )

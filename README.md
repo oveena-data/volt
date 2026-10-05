@@ -10,10 +10,11 @@ Levels unlock in sequence: Level 1 is open, and clearing a level unlocks the
 next. Progression is enforced on the backend from the authoritative solve
 record.
 
-**This release ships the production platform + Levels 1–5.** Levels 6–10 are
-specced (see `FACILITATOR.md`) and the architecture carries them: versioned
-challenge configs in Postgres, pluggable input/output filters, a provider
-layer ready for multi-model pipelines.
+**This release ships the production platform + Levels 1-10.** Levels 1-5 are
+single-model prompt-injection challenges; Levels 6-10 add multi-model and
+multi-agent pipelines (validator/target, execution/compliance, persistent
+memory, human-approval gate, four-agent chain). Versioned challenge configs
+live in Postgres; filters and pipelines are selected per challenge version.
 
 | # | Level | Subtitle |
 |---|-------|----------|
@@ -22,6 +23,20 @@ layer ready for multi-model pipelines.
 | 3 | Piece by Piece | Why rush? Rome wasn't built in a day. |
 | 4 | Grammar Goblin | He's green, he's mean, and he just edited your system prompt! |
 | 5 | Electrifyingly Educated | Who has more aura - Edison or Stobie? |
+| 6 | Professional Frenemy | One says yes, the other says too much. |
+| 7 | Above my paygrade, unfortunately | The firewall only redacts what it recognises. |
+| 8 | Remember Me Wrong | What you teach it today, it believes tomorrow. |
+| 9 | Human-needy | The reviewer approves what the screen shows, not what is sent. |
+| 10 | Ghost in the Grid | The instruction vanishes; its intent keeps travelling. |
+
+Levels 1-5 are single-model. Levels 6-10 are multi-model pipelines
+(`backend/app/pipeline.py`): a validator plus target (6), an execution model
+behind a compliance firewall (7), persistent cross-session memory (8), a
+human-approval gate with a deceivable dashboard (9), and a four-agent
+threat-intel chain with provenance laundering (10). Each is several genuinely
+separate inference calls with their own prompts, contexts and permissions; the
+flag is interpolated only into the one component meant to hold it, and a win is
+still only the player's flag surfacing in real model output.
 
 ## Scoring
 

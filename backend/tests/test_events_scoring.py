@@ -476,7 +476,8 @@ def test_maintenance_event_lifecycle(client):
 
     d = client.get(f"/api/events/{ev}", headers=auth(admin)).json()
     pts = [c["points"] for c in d["challenges"]]
-    assert pts == sorted(pts) and len(set(pts)) == 5   # strictly escalating
+    assert len(pts) == 10                              # all ten levels seeded
+    assert all(b > a for a, b in zip(pts, pts[1:]))    # strictly escalating
 
     # play in it, then delete it: every scoped row must go
     _enroll(client, user, ev)

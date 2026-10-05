@@ -143,6 +143,7 @@ async def event_detail(request: Request) -> JSONResponse:
             challenges.append({
                 "challenge_id": r["challenge_id"], "number": r["number"],
                 "title": cfg.get("title"), "subtitle": cfg.get("subtitle", ""),
+                "overview": cfg.get("overview", ""),
                 "points": r["points"],
                 "version": r["version"],
                 "open_now": open_now,

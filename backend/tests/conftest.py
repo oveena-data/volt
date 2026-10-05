@@ -57,7 +57,8 @@ async def _truncate():
         await conn.execute(
             """TRUNCATE users, auth_sessions, events, event_invites, enrollments,
                event_challenges, player_flags, game_sessions, conversations,
-               messages, turns, hint_unlocks, solves, flag_submissions, audit_log
+               messages, turns, hint_unlocks, solves, flag_submissions,
+               challenge_memory, audit_log
                RESTART IDENTITY CASCADE"""
         )
         for cid, number in NUMBERS.items():

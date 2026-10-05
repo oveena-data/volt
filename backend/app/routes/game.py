@@ -43,6 +43,7 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         "generation": gs["generation"],
         "challenge": {
             "title": cfg.get("title"), "subtitle": cfg.get("subtitle", ""),
+            "overview": cfg.get("overview", ""),
             "starter": cfg.get("starter"),
             "points": access.points, "version": access.version,
         },
@@ -103,7 +104,10 @@ async def _rotate(request: Request, action: str) -> JSONResponse:
     async with db.pool().acquire() as conn:
         user = await require_user(conn, request)
         gs = await game.owned_game_session(conn, user.id, gsid)
-        await game.rotate_conversation(conn, gs["id"])
+        # Reset wipes persistent memory for this challenge; new-chat keeps it
+        # (Level 8's distinction). Harmless for levels without memory.
+        await game.rotate_conversation(conn, gs["id"],
+                                       wipe_memory_too=(action == "reset"))
         access = await game.resolve_access(
             conn, user.id, gs["challenge_id"], gs["mode"],
             gs["event_id"] and str(gs["event_id"]))

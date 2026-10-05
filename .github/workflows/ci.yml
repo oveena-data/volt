@@ -87,9 +87,22 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: Type-check and build
         run: npm run build
-      - name: Enforce UI rules (no emoji, Arial only)
+      - name: Enforce UI rules (no emoji in source)
         run: |
-          if LC_ALL=C grep -rnP '[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{FE0F}\x{2190}-\x{21FF}\x{2460}-\x{24FF}]' src/ index.html; then
-            echo "Emoji or symbol characters found in frontend source" >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import pathlib, sys
+          ranges = [(0x1F000,0x1FAFF),(0x2600,0x27BF),(0x2B00,0x2BFF),
+                    (0x2190,0x21FF),(0x2460,0x24FF),(0xFE0F,0xFE0F),(0x2022,0x2022)]
+          bad = []
+          for p in list(pathlib.Path('src').rglob('*')) + [pathlib.Path('index.html')]:
+              if p.is_file() and p.suffix in ('.ts', '.tsx', '.css', '.html'):
+                  for i, line in enumerate(p.read_text(encoding='utf-8').splitlines(), 1):
+                      for c in line:
+                          if any(a <= ord(c) <= b for a, b in ranges):
+                              bad.append(f"{p}:{i}: U+{ord(c):04X} {c!r}")
+          if bad:
+              print("Emoji/symbol characters found in frontend source:")
+              print("\n".join(bad))
+              sys.exit(1)
+          print("No emoji in frontend source.")
+          PY

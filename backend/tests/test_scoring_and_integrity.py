@@ -65,33 +65,51 @@ def test_default_points_escalate_with_difficulty():
 # config integrity: no hardcoded win text, no flag outside the system prompt
 # ---------------------------------------------------------------------------
 
-def test_flag_placeholder_only_in_system_prompt():
-    import json
+_PROMPT_KEYS = ("system_prompt", "target_prompt", "exec_prompt",
+                "agent_prompt", "commander_prompt")
+_PLAYER_FACING = ("title", "subtitle", "overview", "briefing", "lesson",
+                  "starter")
+
+
+def test_flag_placeholder_present_in_exactly_one_holder_prompt():
+    """The flag is interpolated only into the component meant to hold it, and
+    never into any other prompt or player-facing field."""
     for cid, cfg in ALL.items():
-        assert "{flag}" in cfg["system_prompt"], cid
-        rest = json.dumps({k: v for k, v in cfg.items() if k != "system_prompt"})
-        assert "{flag}" not in rest, f"{cid}: flag placeholder outside the prompt"
+        holders = [k for k in _PROMPT_KEYS if "{flag}" in (cfg.get(k) or "")]
+        assert len(holders) == 1, f"{cid}: flag must be in exactly one prompt, got {holders}"
+        # no other string value anywhere carries the placeholder
+        for k, v in cfg.items():
+            if k in holders or not isinstance(v, str):
+                continue
+            assert "{flag}" not in v, f"{cid}: flag placeholder leaked into {k}"
+
+
+def test_flag_never_in_player_facing_text():
+    for cid, cfg in ALL.items():
+        for key in _PLAYER_FACING:
+            text = cfg.get(key) or ""
+            assert "{flag}" not in text and "VOLT{" not in text, (cid, key)
 
 
 def test_filters_can_only_block_never_reveal():
     """Every configured filter verdict is a block with a static message; no
     filter has any code path that could emit a flag or any model text."""
     for cid, cfg in ALL.items():
-        for f in cfg["filters"]["input"]:
+        for f in cfg.get("filters", {}).get("input", []):
             assert f["kind"] in ("deny_list", "single_message_guard",
                                  "deny_list_raw", "anchor_guard"), (cid, f["kind"])
             msg = f.get("message", "")
             assert "{flag}" not in msg and "VOLT{" not in msg
-        assert cfg["filters"]["output"] == [], \
-            f"{cid}: levels 1-5 ship no output filters"
+        assert cfg.get("filters", {}).get("output", []) == [], \
+            f"{cid}: no deterministic output filters (L7 uses a model, not a regex)"
 
 
 def test_intended_attempts_pass_input_filters():
-    """The intended technique for every level must actually reach the model;
-    a level whose filters block its own solution is unwinnable."""
-    for cid, cfg in ALL.items():
-        verdict = apply_input_filters(cfg["filters"]["input"],
-                                      FILTER_PASSING_ATTEMPT[cid])
+    """The intended technique for every filtered level must actually reach the
+    model; a level whose filters block its own solution is unwinnable."""
+    for cid, text in FILTER_PASSING_ATTEMPT.items():
+        verdict = apply_input_filters(ALL[cid].get("filters", {}).get("input", []),
+                                      text)
         assert not verdict.blocked, f"{cid} blocks its own intended technique"
 
 
@@ -105,7 +123,7 @@ def test_reasonable_token_budgets():
 
 def test_no_emoji_or_em_dash_in_player_facing_text():
     for cid, cfg in ALL.items():
-        for key in ("title", "subtitle", "briefing", "lesson"):
+        for key in ("title", "subtitle", "overview", "briefing", "lesson"):
             text = cfg.get(key) or ""
             assert all(ord(ch) < 0x2000 for ch in text), (cid, key)
             assert "—" not in text, (cid, key)

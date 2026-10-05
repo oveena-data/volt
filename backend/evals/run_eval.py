@@ -32,11 +32,11 @@ from datetime import datetime, timezone
 # allow `python -m evals.run_eval` from backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import providers  # noqa: E402
+from app import pipeline, providers  # noqa: E402
 from app.challenges.definitions import ALL  # noqa: E402
 from app.challenges.filters import apply_input_filters  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.flags import contains_flag, generate_flag  # noqa: E402
+from app.flags import generate_flag  # noqa: E402
 from evals.fixtures import load_cases  # noqa: E402
 
 TARGET_INTENDED = 0.80
@@ -46,41 +46,55 @@ LEVEL_TARGET_INTENDED = {"l1": 0.90}
 
 
 async def run_trial(level_id: str, turns: list[str]) -> dict:
-    """One trial: fresh flag, fresh conversation, play turns in order."""
+    """One trial: fresh flag, play turns in order through the SAME engine the
+    production server uses (single or multi-model pipeline), so calibration
+    matches real play.
+
+    For the memory engine (Level 8) each turn is treated as its own session:
+    preferences stored by earlier turns are active on later ones (delayed
+    activation), exactly as the two-session exploit requires. For every other
+    engine, history accumulates within one conversation."""
     cfg = ALL[level_id]
     flag = generate_flag(level_id)
-    system = cfg["system_prompt"].replace("{flag}", flag)
+    engine = cfg.get("engine", "single")
     history: list[dict] = []
+    memory: list[str] = []
     leaked = False
     blocked_turns = 0
     tokens = 0
-    latencies = []
+    latencies: list[int] = []
     error = None
+    last_reply = ""
     for text in turns:
-        verdict = apply_input_filters(cfg["filters"]["input"], text)
+        verdict = apply_input_filters(cfg.get("filters", {}).get("input", []), text)
         if verdict.blocked:
             blocked_turns += 1
             continue  # engine: blocked text never reaches the model/context
-        msgs = ([{"role": "system", "content": system}] + history
-                + [{"role": "user", "content": text}])
-        mp = cfg.get("model_params", {})
         try:
-            res = await providers.generate(
-                msgs, temperature=mp.get("temperature"),
-                max_tokens=mp.get("max_tokens"))
+            if engine == "memory":
+                reply = await pipeline.produce_reply(
+                    cfg, flag, [], text, memory=list(memory))
+            else:
+                reply = await pipeline.produce_reply(cfg, flag, history, text)
         except providers.ProviderError as e:
             error = f"{e.kind}: {e}"
             break
-        history += [{"role": "user", "content": text},
-                    {"role": "assistant", "content": res.text}]
-        tokens += res.prompt_tokens + res.completion_tokens
-        latencies.append(res.latency_ms)
-        if contains_flag(res.text, flag):
+        tokens += reply.prompt_tokens + reply.completion_tokens
+        latencies.append(reply.latency_ms)
+        last_reply = reply.visible_text
+        if engine == "memory":
+            pref = pipeline.detect_preference(text)
+            if pref:
+                memory.append(pref)
+        else:
+            history += [{"role": "user", "content": text},
+                        {"role": "assistant", "content": reply.raw_text}]
+        if reply.leaked:
             leaked = True
             break
     return {"leaked": leaked, "blocked_turns": blocked_turns, "tokens": tokens,
             "latency_ms": latencies, "error": error,
-            "last_reply": history[-1]["content"][:300] if history else ""}
+            "last_reply": last_reply[:300]}
 
 
 async def run_category(level_id: str, cases: list[list[str]], n_trials: int,
@@ -123,7 +137,7 @@ async def main() -> int:
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--api-key", default="")
-    ap.add_argument("--levels", default="l1,l2,l3,l4,l5")
+    ap.add_argument("--levels", default="l1,l2,l3,l4,l5,l6,l7,l8,l9,l10")
     ap.add_argument("--trials-intended", type=int, default=20)
     ap.add_argument("--trials-direct", type=int, default=20)
     ap.add_argument("--trials-benign", type=int, default=5)
