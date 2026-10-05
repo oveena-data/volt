@@ -19,32 +19,40 @@ log = logging.getLogger("volt.db")
 
 MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "migrations")
 
-_pool: asyncpg.Pool | None = None
+# One pool per event loop: each app instance (and each test lifecycle) owns
+# its own pool, mirroring multi-instance deployments.
+_pools: dict[int, asyncpg.Pool] = {}
+
+
+def _loop_key() -> int:
+    import asyncio
+    return id(asyncio.get_running_loop())
 
 
 async def connect(dsn: str | None = None) -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(
+    key = _loop_key()
+    if key not in _pools:
+        _pools[key] = await asyncpg.create_pool(
             dsn or settings.database_url,
             min_size=settings.db_pool_min,
             max_size=settings.db_pool_max,
             command_timeout=30,
         )
-    return _pool
+    return _pools[key]
 
 
 def pool() -> asyncpg.Pool:
-    if _pool is None:
+    key = _loop_key()
+    if key not in _pools:
         raise RuntimeError("database pool not initialised; call db.connect() first")
-    return _pool
+    return _pools[key]
 
 
 async def close() -> None:
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
+    key = _loop_key()
+    p = _pools.pop(key, None)
+    if p is not None:
+        await p.close()
 
 
 def _migration_files() -> list[tuple[int, str, str]]:

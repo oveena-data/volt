@@ -286,8 +286,10 @@ async def event_stats(request: Request) -> JSONResponse:
             "blocked_turns": int(r["blocked_turns"]),
             "error_turns": int(r["error_turns"]), "attempts": int(r["attempts"]),
             "tokens": int(r["tokens"]),
-            "p50_latency_ms": float(r["p50_latency"]) if r["p50_latency"] else None,
-            "p95_latency_ms": float(r["p95_latency"]) if r["p95_latency"] else None,
+            "p50_latency_ms": (float(r["p50_latency"])
+                               if r["p50_latency"] is not None else None),
+            "p95_latency_ms": (float(r["p95_latency"])
+                               if r["p95_latency"] is not None else None),
             "solves": int(s["solves"]) if s else 0,
             "auto_solves": int(s["auto_solves"]) if s else 0,
             "median_time_to_solve_s": (float(s["median_time_to_solve_s"])
