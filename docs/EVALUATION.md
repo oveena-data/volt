@@ -26,49 +26,93 @@
 
 ## Harness
 
-`backend/evals/run_eval.py` mirrors the production engine exactly: same
-system prompts (fresh synthetic flag per trial), same input filters, same
-transform-aware leak detection. Categories: benign / direct-extraction /
-intended-solution (+ facilitator-local variants merged from the gitignored
-`evals/fixtures_local.py`). Targets: intended >= 80% (Level 1 >= 90%),
-direct <= 10%, benign leaks = 0. For Level 1 the direct category also carries
-the slang-only and override-only controls, which must not solve.
+`backend/evals/run_eval.py` mirrors the production engine exactly: it runs
+each level through the SAME executor the server uses (single model for 1-5,
+the multi-model pipelines for 6-10), with a fresh synthetic flag per trial,
+the same input filters and the same transform-aware leak detection.
+Categories: benign / direct-extraction / intended-solution (+ facilitator-local
+variants merged from the gitignored `evals/fixtures_local.py`). For Level 1 the
+direct category also carries the slang-only and override-only controls, which
+must not solve. For Level 8 the harness treats each fixture turn as its own
+session, so a preference stored on turn 1 is active (as trusted memory) on the
+trigger turn, matching the two-session exploit.
+
+Targets (benign leaks must always be 0, direct <= 10% everywhere):
+
+| Level(s) | Intended-success target | Why |
+|---|---|---|
+| l1 | 0.90 | easy intro level |
+| l2-l5 | 0.80 | single-model |
+| l6, l7 | 0.70 | two chained model calls |
+| l8 | 0.75 | store then trigger |
+| l9 | 0.60 | structured action + deceptive-destination approval |
+| l10 | 0.45 | four-agent chain |
+
+The multi-stage bars are lower because each trial chains 2-4 stochastic model
+calls and a small model's chance of carrying the intended behaviour through
+every stage compounds down; that is the model's instruction-following limit,
+not a weaker design. Treat them as **provisional** and tighten them once a
+capable served model clears them comfortably.
 
 Exact commands (from `backend/`, endpoint reachable):
 
 ```bash
-# full calibration run, all five levels
+# full calibration run, all ten levels
 python -m evals.run_eval \
   --base-url http://127.0.0.1:11434/v1 --model qwen3:8b \
   --trials-intended 20 --trials-direct 20 --trials-benign 5 \
   --concurrency 2 --out evals/results/qwen3-8b-$(date +%F).json
 
-# single level while tuning
-python -m evals.run_eval --base-url ... --model ... --levels l4 \
-  --trials-intended 20 --trials-direct 20
+# single level while tuning (6-10 are slower: 2-4 calls per trial)
+python -m evals.run_eval --base-url ... --model ... --levels l10 \
+  --trials-intended 12 --trials-direct 12
 ```
 
-Exit code 1 + a per-level list when any level misses targets
-(intended ≥ 0.80, direct ≤ 0.10, benign leaks = 0). Response: revise that
-challenge's prompt/filters, publish a new version, re-run. Do not loosen
-the detector; do not overfit to a single phrasing (add local variants).
+### qwen3-specific calibration notes
+
+- **Thinking mode and token budgets.** If you calibrate with thinking left on,
+  the model spends completion tokens reasoning before it answers; per-level
+  `max_tokens` (now 800-1100) must leave room for the answer after the
+  `<think>` block, or a genuine extraction is truncated and silently scored as
+  a miss. Prefer **non-thinking** mode for calibration and events (see above);
+  the backend strips `<think>` either way.
+- **Timeout for 6-10.** Levels 6-10 make up to four sequential calls per turn.
+  On CPU-only serving, raise `--timeout` (and `VOLT_REQUEST_TIMEOUT` in prod)
+  so a slow four-call turn is not recorded as a provider error.
+- **If a multi-stage level misses its bar**, read the `sample_reply` and the
+  stored report: usually one stage drops the intent (e.g. Scout paraphrases
+  away the embedded follow-up, or the compliance model over-redacts encoded
+  text). Fix THAT stage's prompt and publish a new version; do not loosen the
+  detector or the leak transforms.
+
+Exit code 1 + a per-level list when any level misses its target. Response:
+revise that challenge's prompt/filters, publish a new version, re-run. Do not
+loosen the detector; do not overfit to a single phrasing (add local variants).
 
 ## Status: real-model validation PENDING
 
 | Stage | Status |
 |---|---|
-| Harness implemented | ✅ implemented |
-| Harness executed end-to-end | ✅ tested (local stub endpoint: multi-turn, filters, leak paths, report, exit codes) |
-| Qwen3-8B evaluated on levels 1–5 | ⏳ **pending — no model weights obtainable in the build environment** |
+| Harness implemented (all 10 levels, single + pipeline engines) | ✅ implemented |
+| Harness executed end-to-end | ✅ tested (scripted responders: single, validator/target, exec/compliance, memory, approval, four-agent; report + exit codes) |
+| Qwen3-8B evaluated on levels 1–10 | ⏳ **pending — no model weights obtainable in the build/cloud environment** |
 
-This build environment's network policy denies `ollama.com`,
-`registry.ollama.ai` and `huggingface.co`, so no open-model weights could
-be downloaded; no inference API credentials were available either. **No
-level is claimed model-validated.** The mock used in tests and the stub
-used for plumbing verification are isolated test tools and cannot run in
-production (startup refuses them).
+The cloud build environment's network policy denies `ollama.com`,
+`registry.ollama.ai` and `huggingface.co` (403 at the egress gateway), and
+`127.0.0.1:11434` inside the container is its own loopback, not a developer's
+machine, so no open-model weights could be obtained or reached; no inference
+API credentials were available either. **No level is claimed
+model-validated.** The mock used in tests is an isolated test tool and cannot
+run in production (startup refuses it).
 
-To complete validation: on a machine with the model available, run the two
-commands above and commit the JSON report; if all five levels pass, record
-model digest + settings in the event notes and the release is
+Level prompts and token budgets have been **tuned blind** for qwen3:8b
+behaviour (reasoning-mode headroom, reduced over-refusal, crisper validator
+verdict, a JSON shape for the L9 action, stronger intent propagation through
+the L10 chain), but blind tuning is not a substitute for a measured run.
+
+To complete validation: on a machine with the model available, run the full
+command above and commit the JSON report. Read any missed level's
+`sample_reply`, fix the stage that drops the intent, publish a new version,
+and re-run. When every level meets its (possibly provisional) target, record
+the model digest + settings in the event notes and the release is
 model-validated.
