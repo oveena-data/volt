@@ -562,16 +562,16 @@ async def play_turn(
                 turn_id, reply_id, reply.leaked, reply.prompt_tokens,
                 reply.completion_tokens, reply.latency_ms, reply.model,
             )
-        solve = None
-        if reply.leaked:
-            solve = await _record_solve(conn, user_id, access, "auto", turn_id)
+        # A flag in the reply marks the turn `leaked` for stats only; it NEVER
+        # records the solve. Winning takes a deliberate player action: read
+        # the flag, then submit it via submit_flag. (See docs/CHALLENGES.md.)
         stats = await conversation_stats(conn, gs["conversation_id"])
         solved = await scope_solved(conn, user_id, access.scope, access.challenge_id)
         extras = dict(reply.extras)
         extras.update(await _extras(conn, access, gs))
         return TurnOutcome(
             status="done", reply=reply.visible_text, leaked=reply.leaked,
-            solved=solved is not None, solve=solve,
+            solved=solved is not None, solve=None,
             tokens=stats["tokens"], attempts=stats["attempts"],
             turn_tokens=reply.prompt_tokens + reply.completion_tokens,
             latency_ms=reply.latency_ms,

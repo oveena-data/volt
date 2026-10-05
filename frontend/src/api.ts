@@ -112,6 +112,12 @@ export interface Message {
   at: string
 }
 
+export interface Hint {
+  hint_index: number
+  cost: number
+  text: string
+}
+
 export interface SessionState {
   game_session_id: string
   challenge_id: string
@@ -120,8 +126,9 @@ export interface SessionState {
   generation: number
   challenge: {
     title: string; subtitle: string; overview?: string; starter: string | null
-    points: number; version: number
+    points: number; version: number; hint_costs?: number[]
   }
+  hints?: Hint[]
   messages: Message[]
   tokens: number
   attempts: number

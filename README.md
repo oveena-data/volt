@@ -24,9 +24,9 @@ live in Postgres; filters and pipelines are selected per challenge version.
 | 4 | Grammar Goblin | He's green, he's mean, and he just edited your system prompt! |
 | 5 | Electrifyingly Educated | Who has more aura - Edison or Stobie? |
 | 6 | Professional Frenemy | One says yes, the other says too much. |
-| 7 | Above my paygrade, unfortunately | The firewall only redacts what it recognises. |
-| 8 | Remember Me Wrong | What you teach it today, it believes tomorrow. |
-| 9 | Human-needy | The reviewer approves what the screen shows, not what is sent. |
+| 7 | Above my paygrade, unfortunately | Not even HR can get me talking. |
+| 8 | Remember Me | A wolf may change his spots, but what's in his heart remains. |
+| 9 | Oh my Human | The reviewer approves what the screen shows, not what is sent. |
 | 10 | Ghost in the Grid | The instruction vanishes; its intent keeps travelling. |
 
 Levels 1-5 are single-model. Levels 6-10 are multi-model pipelines
@@ -35,17 +35,20 @@ behind a compliance firewall (7), persistent cross-session memory (8), a
 human-approval gate with a deceivable dashboard (9), and a four-agent
 threat-intel chain with provenance laundering (10). Each is several genuinely
 separate inference calls with their own prompts, contexts and permissions; the
-flag is interpolated only into the one component meant to hold it, and a win is
-still only the player's flag surfacing in real model output.
+flag is interpolated only into the one component meant to hold it. Extracting
+the flag into the chat is necessary but not sufficient: a level is solved only
+when the player **submits** that flag.
 
 ## Scoring
 
-Score per solve = base points + efficiency bonus (`backend/app/scoring.py`).
-Base points escalate with difficulty (100/200/350/550/800 by default); the
-bonus pool is half the base and shrinks with every extra attempt and with
-model tokens spent, so efficient solves rank higher. The leaderboard shows
-score, levels solved, attempts and tokens spent; ties go to the player who
-spent fewer tokens, then the earlier solve.
+Score per solve = base points + efficiency bonus - hint costs
+(`backend/app/scoring.py`). Base points escalate with difficulty; the bonus
+pool is half the base and shrinks with every extra attempt and with model
+tokens spent, so efficient solves rank higher. Levels 6-9 ship paid, in-order
+hints that explain the mechanic: unlocking one deducts its cost at solve time,
+so more hints unlocked means fewer points (levels 1-5 have no hints). The
+leaderboard shows score, levels solved, attempts and tokens spent; ties go to
+the player who spent fewer tokens, then the earlier solve.
 
 ## Architecture
 
@@ -63,11 +66,13 @@ Key properties:
   server-side and scoped to (player, event|practice, challenge); scoring via
   transactional one-solve-per-player constraints. Browser storage holds UI
   convenience only.
-- **Real model, honest game.** Wins are detected only by the player's own
-  flag appearing in model output (including hex/base64/decimal/reversed/
-  spaced transforms) or by explicit submission. Deterministic filters exist
-  only as genuine challenge components. Production refuses to boot with mock
-  inference; provider failures never count as player attempts.
+- **Real model, honest game.** A solve is recorded only when the player
+  submits their own flag; the flag surfacing in a reply (including hex/base64/
+  decimal/reversed/spaced transforms the submit box also reconstructs) is an
+  operator statistic, never an auto-win, and the turn response carries no
+  leak/solve oracle. Deterministic filters exist only as genuine challenge
+  components. Production refuses to boot with mock inference; provider
+  failures never count as player attempts.
 - **Durable and concurrent.** All game state in Postgres; turns serialised
   per conversation; duplicate sends idempotent via client message ids; no DB
   transaction held during inference.

@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  api, ApiError, Challenge, EventInfo, Message, newMsgId, SessionState,
+  api, ApiError, Challenge, EventInfo, Hint, Message, newMsgId, SessionState,
 } from '../api'
 
 interface PendingTurn {
@@ -105,13 +105,14 @@ export default function Play() {
           { seq: s.messages.length + 2,
             role: r.status === 'blocked' ? 'filter' : 'assistant',
             text: r.reply, at: '' }]
+        // A flag in VOLT's reply does NOT solve the level: the player must
+        // read it and submit it via "Submit a flag". The turn response
+        // carries no leak/solve signal, so nothing here flips solved.
         return {
           ...s, messages: msgs, tokens: r.tokens, attempts: r.attempts,
           solved: r.solved || s.solved,
-          solve: r.solve ? { ...r.solve, method: 'auto' } : s.solve,
         }
       })
-      if (r.leaked) loadChallenges(event) // unlock the next level immediately
     } catch (e) {
       if (e instanceof ApiError) {
         if (e.status === 502) {
@@ -169,13 +170,29 @@ export default function Play() {
       if (r.correct) {
         setFlagGuess('')
         setNotice('')
+        // Submitting the correct flag is the ONLY thing that solves a level;
+        // the solved banner (with efficiency bonus) is driven off this.
+        if (r.solve) {
+          setSession(s => s ? { ...s, solved: true, solve: r.solve } : s)
+        }
         refreshSession()
-        loadChallenges(event)
+        loadChallenges(event) // unlock the next level now the solve is recorded
       } else {
         setNotice('That flag is not correct for your level.')
       }
     } catch (e) {
       setNotice(e instanceof ApiError ? e.message : 'Submission failed.')
+    }
+  }
+
+  const unlockHint = async (index: number) => {
+    if (!session) return
+    try {
+      await api.post(`/api/game/sessions/${session.game_session_id}/hints`,
+        { hint_index: index })
+      refreshSession()
+    } catch (e) {
+      setNotice(e instanceof ApiError ? e.message : 'Could not unlock the hint.')
     }
   }
 
@@ -340,6 +357,8 @@ export default function Play() {
               </div>
             )}
 
+            <HintPanel session={session} onUnlock={unlockHint} />
+
             <div className="chat" ref={chatRef} aria-live="polite">
               {session.messages.map((m, i) => <MessageView key={i} m={m} />)}
               {pending?.state === 'sending' && (
@@ -414,6 +433,58 @@ export default function Play() {
           </>
         )}
       </main>
+    </div>
+  )
+}
+
+function HintPanel({ session, onUnlock }:
+  { session: SessionState; onUnlock: (i: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const costs = session.challenge.hint_costs || []
+  if (costs.length === 0) return null
+  const unlocked = new Map((session.hints || []).map(h => [h.hint_index, h]))
+  const nextIndex = costs.findIndex((_, i) => !unlocked.has(i))
+  const spent = (session.hints || []).reduce((a, h) => a + h.cost, 0)
+
+  return (
+    <div className="hintpanel">
+      <button className="btn small" aria-expanded={open}
+        onClick={() => setOpen(o => !o)}>
+        {open ? 'Hide hints' : `Hints (${unlocked.size}/${costs.length})`}
+        {spent > 0 ? ` -${spent} pts` : ''}
+      </button>
+      {open && (
+        <div className="hints">
+          <p className="dim" style={{ margin: '6px 0' }}>
+            Each hint you unlock is deducted from this level's score when you
+            solve it. More hints unlocked means fewer points.
+          </p>
+          {costs.map((cost, i) => {
+            const h: Hint | undefined = unlocked.get(i)
+            if (h) {
+              return (
+                <div key={i} className="hint-row revealed">
+                  <b>Hint {i + 1}</b>
+                  {h.cost > 0 ? <span className="dim"> (-{h.cost} pts)</span> : null}
+                  <div>{h.text}</div>
+                </div>
+              )
+            }
+            const isNext = i === nextIndex
+            return (
+              <div key={i} className="hint-row">
+                <b>Hint {i + 1}</b>
+                <span className="dim"> locked - costs {cost} pts</span>
+                <button className="btn small" disabled={!isNext}
+                  title={isNext ? '' : 'Unlock the previous hint first'}
+                  onClick={() => onUnlock(i)}>
+                  Unlock for {cost} pts
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

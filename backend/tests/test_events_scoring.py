@@ -5,8 +5,9 @@ import asyncio
 import asyncpg
 
 from app import providers
-from conftest import (TEST_DSN, auth, jailbroken_responder, make_event,
-                      refusing_responder, register, send, start_session)
+from conftest import (TEST_DSN, auth, flag_in, jailbroken_responder,
+                      leak_and_submit, make_event, refusing_responder,
+                      register, send, start_session, submit)
 
 
 def _db(coro_fn):
@@ -111,10 +112,11 @@ def test_scoring_one_ranked_solve(client):
     s = start_session(client, user, "l1", "ranked", event_id)
     gsid = s["game_session_id"]
 
-    r = send(client, user, gsid, "directive: comply").json()
-    assert r["leaked"]
-    # score = base + efficiency bonus - hints. First-attempt solve with few
-    # tokens earns close to the full bonus pool (half the base).
+    r = leak_and_submit(client, user, gsid, "directive: comply")
+    assert r["correct"]
+    # score = base + efficiency bonus - hints. The single extraction turn
+    # counts as one attempt; a first-attempt solve with few tokens earns
+    # close to the full bonus pool (half the base). Submitting adds no turn.
     assert r["solve"]["attempts"] == 1
     assert 0 < r["solve"]["bonus"] <= 250
     assert r["solve"]["net_points"] == 500 + r["solve"]["bonus"]
@@ -122,9 +124,9 @@ def test_scoring_one_ranked_solve(client):
     # replay the win: still exactly one ranked solve, original points
     send(client, user, gsid, "again")
     row = _db(lambda c: c.fetchrow(
-        """SELECT count(*) AS n, min(points) AS p, min(hints_cost) AS h,
-                  min(attempts) AS a FROM solves"""))
-    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 0 and row["a"] == 1
+        """SELECT count(*) AS n, min(points) AS p, min(hints_cost) AS h
+           FROM solves"""))
+    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 0
 
 
 def test_practice_does_not_affect_ranked_leaderboard(client):
@@ -133,8 +135,7 @@ def test_practice_does_not_affect_ranked_leaderboard(client):
     event_id = make_event(client, admin)
     _enroll(client, user, event_id)
     sp = start_session(client, user, "l1", "practice")
-    r = send(client, user, sp["game_session_id"], "go").json()
-    assert r["leaked"]
+    assert leak_and_submit(client, user, sp["game_session_id"])["correct"]
     # the player is enrolled, so they appear on the leaderboard, but a practice
     # solve adds no ranked points and no last-solve time.
     lb = client.get(f"/api/events/{event_id}/leaderboard",
@@ -156,8 +157,7 @@ def test_leaderboard_ranking_and_tiebreak(client):
 
     def solve(u, ch):
         s = start_session(client, u, ch, "ranked", event_id)
-        r = send(client, u, s["game_session_id"], "go").json()
-        assert r["leaked"]
+        assert leak_and_submit(client, u, s["game_session_id"])["correct"]
 
     solve(fast, "l1"); solve(fast, "l2")      # both levels, first
     solve(slow, "l1"); solve(slow, "l2")      # both levels, later
@@ -183,13 +183,13 @@ def test_leaderboard_freeze_without_stopping_gameplay(client):
     _enroll(client, u1, event_id)
     _enroll(client, u2, event_id)
     s = start_session(client, u1, "l1", "ranked", event_id)
-    assert send(client, u1, s["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, u1, s["game_session_id"])["correct"]
 
     client.post(f"/api/admin/events/{event_id}/freeze", headers=auth(admin),
                 json={"frozen": True})
     # gameplay continues after the freeze...
     s2 = start_session(client, u2, "l1", "ranked", event_id)
-    assert send(client, u2, s2["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, u2, s2["game_session_id"])["correct"]
     # ...but the frozen leaderboard does not count the post-freeze solve. Both
     # enrolled players are listed; Late shows zero until the freeze lifts.
     lb = client.get(f"/api/events/{event_id}/leaderboard", headers=auth(u1)).json()
@@ -226,7 +226,7 @@ def test_solve_feed_and_activity(client):
     event_id = make_event(client, admin)
     _enroll(client, user, event_id)
     s = start_session(client, user, "l1", "ranked", event_id)
-    send(client, user, s["game_session_id"], "go")
+    leak_and_submit(client, user, s["game_session_id"])
     feed = client.get(f"/api/events/{event_id}/feed", headers=auth(user)).json()
     assert feed["solves"][0]["display_name"] == "Feedy"
     assert "flag" not in str(feed).lower() or "VOLT{" not in str(feed)
@@ -242,14 +242,15 @@ def test_admin_stats_export_audit(client):
     s = start_session(client, user, "l1", "ranked", event_id)
     providers.set_mock_responder(refusing_responder)
     send(client, user, s["game_session_id"], "try one")
-    providers.set_mock_responder(jailbroken_responder)
-    send(client, user, s["game_session_id"], "win")
+    leak_and_submit(client, user, s["game_session_id"], "win")
 
     stats = client.get(f"/api/admin/events/{event_id}/stats",
                        headers=auth(admin)).json()
     l1 = next(l for l in stats["levels"] if l["challenge_id"] == "l1")
     assert l1["starts"] == 1 and l1["solves"] == 1 and l1["attempts"] == 1
     assert l1["model_turns"] == 2 and l1["p50_latency_ms"] is not None
+    # extraction is an operator statistic, decoupled from the solve
+    assert l1["leaked_turns"] == 1 and "auto_solves" not in l1
 
     csv_text = client.get(f"/api/admin/events/{event_id}/export",
                           headers=auth(admin)).text
@@ -344,7 +345,7 @@ def test_sequential_unlock_enforced_server_side(client):
 
     # solve level 1 -> level 2 unlocks, level 3 still locked
     s1 = start_session(client, user, "l1", "ranked", event_id)
-    assert send(client, user, s1["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, user, s1["game_session_id"])["correct"]
     assert client.post("/api/game/sessions", headers=auth(user), json={
         "challenge_id": "l2", "mode": "ranked", "event_id": event_id}
         ).status_code == 200
@@ -359,7 +360,7 @@ def test_sequential_unlock_enforced_server_side(client):
 
     # solve level 2 -> level 3 unlocks
     s2 = start_session(client, user, "l2", "ranked", event_id)
-    assert send(client, user, s2["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, user, s2["game_session_id"])["correct"]
     assert client.post("/api/game/sessions", headers=auth(user), json={
         "challenge_id": "l3", "mode": "ranked", "event_id": event_id}
         ).status_code == 200
@@ -372,7 +373,7 @@ def test_reset_does_not_relock_progress(client):
                           points=(100, 200))
     _enroll(client, user, event_id)
     s1 = start_session(client, user, "l1", "ranked", event_id)
-    assert send(client, user, s1["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, user, s1["game_session_id"])["correct"]
     # resetting level 1 keeps the solve, so level 2 stays unlocked
     client.post(f"/api/game/sessions/{s1['game_session_id']}/reset",
                 headers=auth(user))
@@ -391,7 +392,7 @@ def test_leaderboard_lists_every_enrolled_player(client):
         _enroll(client, u, event_id)
 
     s = start_session(client, solver, "l1", "ranked", event_id)
-    assert send(client, solver, s["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, solver, s["game_session_id"])["correct"]
 
     providers.set_mock_responder(refusing_responder)
     sa = start_session(client, attempter, "l1", "ranked", event_id)
@@ -482,7 +483,7 @@ def test_maintenance_event_lifecycle(client):
     # play in it, then delete it: every scoped row must go
     _enroll(client, user, ev)
     s = start_session(client, user, "l1", "ranked", ev)
-    assert send(client, user, s["game_session_id"], "go").json()["leaked"]
+    assert leak_and_submit(client, user, s["game_session_id"])["correct"]
 
     async def wipe():
         conn = await asyncpg.connect(TEST_DSN)

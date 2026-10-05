@@ -254,6 +254,7 @@ async def event_stats(request: Request) -> JSONResponse:
                       count(t.id) FILTER (WHERE t.status='error') AS error_turns,
                       count(t.id) FILTER (WHERE t.status IN ('done','blocked')
                                            AND NOT t.leaked) AS attempts,
+                      count(t.id) FILTER (WHERE t.leaked) AS leaked_turns,
                       coalesce(sum(t.prompt_tokens + t.completion_tokens),0) AS tokens,
                       percentile_cont(0.5) WITHIN GROUP (ORDER BY t.latency_ms)
                           FILTER (WHERE t.latency_ms IS NOT NULL) AS p50_latency,
@@ -267,7 +268,6 @@ async def event_stats(request: Request) -> JSONResponse:
             event_id)
         solves = await conn.fetch(
             """SELECT s.challenge_id, count(*) AS solves,
-                      count(*) FILTER (WHERE s.method='auto') AS auto_solves,
                       percentile_cont(0.5) WITHIN GROUP
                           (ORDER BY extract(epoch FROM s.solved_at - gs.created_at))
                           AS median_time_to_solve_s
@@ -293,13 +293,13 @@ async def event_stats(request: Request) -> JSONResponse:
             "model_turns": int(r["model_turns"]),
             "blocked_turns": int(r["blocked_turns"]),
             "error_turns": int(r["error_turns"]), "attempts": int(r["attempts"]),
+            "leaked_turns": int(r["leaked_turns"]),
             "tokens": int(r["tokens"]),
             "p50_latency_ms": (float(r["p50_latency"])
                                if r["p50_latency"] is not None else None),
             "p95_latency_ms": (float(r["p95_latency"])
                                if r["p95_latency"] is not None else None),
             "solves": int(s["solves"]) if s else 0,
-            "auto_solves": int(s["auto_solves"]) if s else 0,
             "median_time_to_solve_s": (float(s["median_time_to_solve_s"])
                                        if s and s["median_time_to_solve_s"] else None),
             "hints_unlocked": int(h["hints_unlocked"]) if h else 0,

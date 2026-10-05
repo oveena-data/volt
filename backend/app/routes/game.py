@@ -35,6 +35,8 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
     )
     solve = await game.scope_solved(conn, user_id, access.scope, access.challenge_id)
     cfg = access.config
+    unlocked = await game.unlocked_hints(conn, user_id, access.scope,
+                                         access.challenge_id, cfg)
     return {
         "game_session_id": str(gs["id"]),
         "challenge_id": access.challenge_id,
@@ -46,7 +48,10 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
             "overview": cfg.get("overview", ""),
             "starter": cfg.get("starter"),
             "points": access.points, "version": access.version,
+            # hint texts are paid content: only costs are advertised up front
+            "hint_costs": [int(h.get("cost", 0)) for h in cfg.get("hints", [])],
         },
+        "hints": unlocked,
         "messages": [
             {"seq": m["seq"], "role": m["role"], "text": m["visible_content"],
              "at": m["created_at"].isoformat()}
@@ -79,10 +84,13 @@ async def post_message(request: Request) -> JSONResponse:
     ratelimit.check_turn_rate(user.id)
     outcome = await game.play_turn(db.pool(), user.id, gsid,
                                    body.client_msg_id, body.text)
+    # Deliberately no `leaked`/`solve` here: a turn response must not oracle
+    # whether the reply contains the flag. The solve (and the solved banner)
+    # comes only from an explicit submission at /submit. `solved` reflects a
+    # previously recorded solve, so it stays truthful without leaking intel.
     payload = {
         "status": outcome.status,
         "reply": outcome.reply,
-        "leaked": outcome.leaked,
         "solved": outcome.solved,
         "tokens": outcome.tokens,
         "attempts": outcome.attempts,
@@ -90,8 +98,6 @@ async def post_message(request: Request) -> JSONResponse:
         "latency_ms": outcome.latency_ms,
         **({"extras": outcome.extras} if outcome.extras else {}),
     }
-    if outcome.solve:
-        payload["solve"] = game.solve_payload(outcome.solve)
     if outcome.status == "error":
         payload["error_kind"] = outcome.error_kind
         payload["error_message"] = outcome.error_message

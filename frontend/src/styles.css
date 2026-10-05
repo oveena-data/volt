@@ -234,6 +234,18 @@ label.field > span {
   border-top: 1px solid var(--border); padding-top: 10px;
 }
 
+.hintpanel { padding: 8px 22px 0; }
+.hints {
+  margin-top: 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 12px; background: #fff;
+}
+.hints .dim { color: var(--text-dim); }
+.hint-row { padding: 8px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
+.hint-row:first-child { border-top: none; }
+.hint-row.revealed { background: var(--accent-soft); margin: 0 -12px; padding: 8px 12px; }
+.hint-row button { margin-left: 10px; }
+.hint-row > div { margin-top: 4px; color: var(--text); }
+
 .trace { padding: 8px 22px 0; }
 .trace-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
 .trace-stage {

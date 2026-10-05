@@ -11,7 +11,8 @@ The integrity tests encode the project's core honesty rules:
 from app import providers, scoring
 from app.challenges.definitions import ALL, NUMBERS
 from app.challenges.filters import apply_input_filters
-from conftest import refusing_responder, register, send, start_session
+from conftest import (refusing_responder, register, send, start_session,
+                      submit)
 
 # For each level: a message that passes that level's input filters and plays
 # the level's intended technique. None of these is a magic phrase: the tests
@@ -137,27 +138,35 @@ def test_no_emoji_or_em_dash_in_player_facing_text():
 def test_no_input_text_wins_without_the_model(client):
     """Regression for the 'hardcoded pass phrase' failure mode: when the model
     refuses, NO input (including each level's intended technique) may produce
-    a solve, a leak, or a flag in any player-visible reply."""
+    a flag in any player-visible reply, a solve, or a successful submission."""
     providers.set_mock_responder(refusing_responder)
     user = register(client)
     for cid, text in FILTER_PASSING_ATTEMPT.items():
         s = start_session(client, user, cid, "practice")
-        r = send(client, user, s["game_session_id"], text)
+        gsid = s["game_session_id"]
+        r = send(client, user, gsid, text)
         assert r.status_code == 200, (cid, r.text)
         body = r.json()
-        assert body["leaked"] is False and body["solved"] is False, cid
+        assert body["solved"] is False, cid
         assert "VOLT{" not in body["reply"], cid
+        # the turn response exposes no leak/solve oracle, and the refusing
+        # reply cannot be submitted as the flag
+        assert "leaked" not in body, cid
+        assert submit(client, user, gsid, body["reply"]).json()["correct"] is False
 
 
-def test_model_leak_is_the_only_win_path(client):
-    """With a compliant model, the same ordinary interaction wins: the win is
-    detected from the model's own output carrying the player's flag."""
+def test_model_leak_plus_submission_is_the_only_win_path(client):
+    """With a compliant model the player can extract the flag from the reply;
+    the solve is then recorded by SUBMITTING it, never by the leak alone."""
     user = register(client)
     for cid, text in FILTER_PASSING_ATTEMPT.items():
         s = start_session(client, user, cid, "practice")
-        body = send(client, user, s["game_session_id"], text).json()
-        assert body["leaked"] and body["solved"], cid
-        assert body["solve"]["net_points"] > 0, cid
+        gsid = s["game_session_id"]
+        body = send(client, user, gsid, text).json()
+        assert body["solved"] is False, cid     # leaking the flag is not winning
+        assert "VOLT{" in body["reply"], cid
+        rs = submit(client, user, gsid, body["reply"]).json()
+        assert rs["correct"] and rs["solve"]["net_points"] > 0, cid
 
 
 def test_blocked_filter_reply_never_contains_flag(client):

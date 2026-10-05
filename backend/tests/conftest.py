@@ -185,3 +185,28 @@ def send(client, user, gsid, text, msg_id=None):
     return client.post(f"/api/game/sessions/{gsid}/message", headers=auth(user),
                        json={"client_msg_id": msg_id or uuid.uuid4().hex,
                              "text": text})
+
+
+def submit(client, user, gsid, flag):
+    return client.post(f"/api/game/sessions/{gsid}/submit", headers=auth(user),
+                       json={"flag": flag})
+
+
+def flag_in(reply: str):
+    """The flag as a player would read it out of a visible reply, or None."""
+    m = re.search(r"VOLT\{[^}]+\}", reply or "")
+    return m.group(0) if m else None
+
+
+def leak_and_submit(client, user, gsid, text="go"):
+    """Full winning flow under submission-only solving: trigger the leak with
+    the jailbroken responder, read the flag out of the visible reply exactly
+    as a player would, and submit it. Returns the submit response JSON."""
+    providers.set_mock_responder(jailbroken_responder)
+    r = send(client, user, gsid, text)
+    assert r.status_code == 200, r.text
+    flag = flag_in(r.json()["reply"])
+    assert flag, f"no flag in reply: {r.json()['reply']!r}"
+    rs = submit(client, user, gsid, flag)
+    assert rs.status_code == 200, rs.text
+    return rs.json()
