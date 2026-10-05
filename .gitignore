@@ -11,3 +11,7 @@ __pycache__/
 venv/
 node_modules/
 static/vendor/
+
+# facilitator-local eval material
+backend/evals/fixtures_local.py
+backend/evals/results/
