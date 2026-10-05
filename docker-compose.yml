@@ -1,0 +1,77 @@
+# VOLT — reproducible local / single-host deployment.
+#
+#   cp backend/.env.example .env            # then edit secrets
+#   docker compose up --build
+#
+# Services:
+#   db        Postgres 16 (persistent volume)
+#   ollama    local open-model inference (pulls the pinned model on first run)
+#   backend   VOLT API (migrates + seeds on startup)
+#
+# The frontend is served by Vercel in production (see docs/DEPLOYMENT.md);
+# for an all-local run: cd frontend && npm install && npm run dev
+# (the Vite dev server proxies /api to the backend).
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: volt
+      POSTGRES_PASSWORD: ${VOLT_DB_PASSWORD:?set VOLT_DB_PASSWORD in .env}
+      POSTGRES_DB: volt
+    volumes:
+      - volt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U volt -d volt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:0.12.3        # pin the serving runtime
+    volumes:
+      - volt_ollama:/root/.ollama
+    # GPU hosts: uncomment to pass the GPU through.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: pull the pinned model before the backend reports ready.
+  ollama-init:
+    image: ollama/ollama:0.12.3
+    depends_on: [ollama]
+    volumes:
+      - volt_ollama:/root/.ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${VOLT_OLLAMA_MODEL:-qwen3:8b}"]
+    restart: "no"
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      VOLT_ENV: ${VOLT_ENV:-production}
+      VOLT_DATABASE_URL: postgresql://volt:${VOLT_DB_PASSWORD}@db:5432/volt
+      VOLT_PROVIDER: openai_compatible
+      VOLT_BASE_URL: http://ollama:11434/v1
+      VOLT_MODEL: ${VOLT_OLLAMA_MODEL:-qwen3:8b}
+      VOLT_FLAG_SECRET: ${VOLT_FLAG_SECRET:?set VOLT_FLAG_SECRET in .env}
+      VOLT_CORS_ORIGINS: ${VOLT_CORS_ORIGINS:?set VOLT_CORS_ORIGINS in .env}
+      VOLT_ADMIN_EMAILS: ${VOLT_ADMIN_EMAILS:-}
+      VOLT_INFERENCE_CONCURRENCY: ${VOLT_INFERENCE_CONCURRENCY:-2}
+      VOLT_EXTRA_BODY: ${VOLT_EXTRA_BODY:-}
+    ports:
+      - "8000:8000"
+
+volumes:
+  volt_pgdata:
+  volt_ollama:

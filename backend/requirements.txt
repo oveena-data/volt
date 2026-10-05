@@ -1,11 +1,11 @@
-# VOLT backend — runs with just these two.
-# (Starlette is FastAPI's foundation; we build directly on it so the game
-#  self-hosts with zero friction.)
-starlette>=0.37
-uvicorn[standard]>=0.30
+# VOLT backend — direct dependencies. Exact tested pins: requirements.lock.txt
+starlette>=1.3
+uvicorn[standard]>=0.50
+httpx>=0.28
+asyncpg>=0.31
+argon2-cffi>=25.1
+pydantic[email]>=2.13
 
-# Only needed when VOLT_PROVIDER=openai_compatible (talking to a real model
-# endpoint: Ollama / Groq / OpenRouter / vLLM / llama.cpp, etc).
-httpx>=0.27
-
-# Tests use the standard library's unittest — no test dependency required.
+# test-only
+pytest>=9.1
+pytest-asyncio>=1.4

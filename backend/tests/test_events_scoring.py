@@ -298,3 +298,23 @@ def test_no_flag_or_prompt_leaks_in_player_payloads(client):
         assert flag not in body
         assert "system_prompt" not in body
         assert "RULES:" not in body
+
+
+def test_event_detail_challenges_for_player_and_admin(client):
+    """Regression: event detail must list challenges for enrolled players AND
+    for (unenrolled) admins managing the event."""
+    admin = register(client, admin=True)
+    user = register(client)
+    event_id = make_event(client, admin, challenges=("l1", "l2"), points=(100, 200))
+    # unenrolled player: event visible, challenges hidden
+    d = client.get(f"/api/events/{event_id}", headers=auth(user)).json()
+    assert d["challenges"] == [] and d["event"]["enrolled"] is False
+    # enrolled player: challenges listed with points
+    _enroll(client, user, event_id)
+    d = client.get(f"/api/events/{event_id}", headers=auth(user)).json()
+    assert [(c["challenge_id"], c["points"]) for c in d["challenges"]] == [
+        ("l1", 100), ("l2", 200)]
+    assert all(c["available"] for c in d["challenges"])
+    # admin, not enrolled: full challenge list for management
+    d = client.get(f"/api/events/{event_id}", headers=auth(admin)).json()
+    assert len(d["challenges"]) == 2

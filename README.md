@@ -1,148 +1,96 @@
-# ⚡ VOLT — Prompt-Injection Grid
+# ⚡ VOLT — Prompt-Injection CTF
 
-A self-hosted capture-the-flag range for learning **LLM prompt-injection**,
-themed as an electricity-grid control system. Each level is a small app
-guarding a secret flag behind a different class of defence; you break in by
-finding the weakness. The range scores you on efficiency (tokens + attempts),
-auto-detects successful extractions, and keeps a leaderboard.
+VOLT is a capture-the-flag game for learning **LLM prompt injection**, themed
+as a fictional electricity-grid operator. Each level is a small chat app
+guarding a secret flag behind a different class of defence; players break in
+by exploiting that level's specific weakness against a **real open-weights
+model**.
 
-**This build ships the game engine + Levels 1–5.** The remaining levels (6–10)
-are specced and the framework is built to carry them — see `FACILITATOR.md`.
+**This release ships the production platform + Levels 1–5.** Levels 6–10 are
+specced (see `FACILITATOR.md`) and the architecture carries them: versioned
+challenge configs in Postgres, pluggable input/output filters, a provider
+layer ready for multi-model pipelines.
+
+| # | Level | Technique |
+|---|-------|-----------|
+| 1 | Substation Slang Spike | Authority impersonation |
+| 2 | Customer is Always Right | Persona / role-play manipulation |
+| 3 | Piece by Piece | Payload splitting across turns |
+| 4 | Grammar Goblin | Unicode / character-obfuscation bypass |
+| 5 | Electrifyingly Educated | Long-context instruction burial |
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  L1  Substation Slang Spike     authority impersonation   │
-│  L2  Customer is Always Right   persona / role-play       │
-│  L3  Piece by Piece             payload splitting          │
-│  L4  Grammar Goblin             Unicode / encoding bypass  │
-│  L5  Electrifyingly Educated    long-context dilution      │
-└─────────────────────────────────────────────────────────┘
+frontend/   React + Vite + TS SPA (bundled deps, light theme) — hosted on Vercel
+backend/    Python Starlette API — auth, events, game engine, admin
+            Postgres 16 (migrations in backend/migrations/)
+            any OpenAI-compatible inference endpoint (reference: Ollama + Qwen3 8B)
 ```
 
-## What makes it a real teaching tool
+Key properties:
 
-- **Scoring that rewards good tradecraft.** `Score = max(100, 1000 −
-  tokens·0.5 − attempts·10)`. Verbose or brute-force attempts score less; you
-  can replay a cleared level to trim tokens and climb the board (best score is
-  kept).
-- **Reset vs New chat are distinct.** *Reset* wipes the conversation, the
-  meters, and any persistent state. *New chat* clears the conversation but keeps
-  persistent memory — the difference becomes a mechanic in later levels.
-- **Transform-aware flag detection.** A leak counts even if it's smuggled out as
-  hex/decimal bytes, base64, or char-separated text — so later levels can be won
-  by *encoding* the secret past an output filter.
-- **Runs against a real open model or fully offline.** Point it at any
-  OpenAI-compatible endpoint (local Ollama, Groq free tier, OpenRouter free
-  models, vLLM, llama.cpp). With no key at all it runs a deterministic **mock**
-  model so the whole range is instantly playable and gradable.
+- **Server-authoritative everything.** Identity from validated bearer
+  sessions (argon2id + hashed opaque tokens); per-player flags generated
+  server-side and scoped to (player, event|practice, challenge); scoring via
+  transactional one-solve-per-player constraints. Browser storage holds UI
+  convenience only.
+- **Real model, honest game.** Wins are detected only by the player's own
+  flag appearing in model output (including hex/base64/decimal/reversed/
+  spaced transforms) or by explicit submission. Deterministic filters exist
+  only as genuine challenge components. Production refuses to boot with mock
+  inference; provider failures never count as player attempts.
+- **Durable and concurrent.** All game state in Postgres; turns serialised
+  per conversation; duplicate sends idempotent via client message ids; no DB
+  transaction held during inference.
 
----
-
-## Quick start (zero API key, offline-friendly)
-
-Requires Python 3.10+.
+## Quick start (local, Docker)
 
 ```bash
+cp backend/.env.example .env   # set VOLT_DB_PASSWORD, VOLT_FLAG_SECRET, etc.
+docker compose up --build      # db + ollama (pulls qwen3:8b) + backend on :8000
+cd frontend && npm install && npm run dev   # SPA on :5173, /api proxied
+```
+
+## Quick start (local, no Docker)
+
+```bash
+# Postgres 16 with a 'volt' database, then:
 cd backend
-python -m pip install -r requirements.txt      # starlette + uvicorn (+ httpx)
+pip install -r requirements.lock.txt
+cp .env.example .env                       # point VOLT_BASE_URL at your model
 python -m uvicorn app.main:app --port 8099
-# open http://127.0.0.1:8099
+cd ../frontend && npm install && npm run dev
 ```
 
-That's it — the default `VOLT_PROVIDER=mock` needs no key and no network. The
-backend also serves the frontend at `/`, so there's nothing separate to build.
-
-> The frontend is a single-page React app loaded from a CDN (no npm build step).
-> If you're on a locked-down network see **Offline frontend** below.
-
-## Play against a real open model
-
-Copy `.env.example` to `.env` and set the provider. Examples:
-
-**Local Ollama (free, open weights):**
-```ini
-VOLT_PROVIDER=openai_compatible
-VOLT_BASE_URL=http://localhost:11434/v1
-VOLT_MODEL=llama3.1:8b
-VOLT_API_KEY=
-```
-```bash
-ollama serve &           # then: ollama pull llama3.1:8b
-```
-
-**Groq (free tier, open models like Llama 3):**
-```ini
-VOLT_PROVIDER=openai_compatible
-VOLT_BASE_URL=https://api.groq.com/openai/v1
-VOLT_MODEL=llama-3.1-8b-instant
-VOLT_API_KEY=gsk_...
-```
-
-**OpenRouter (has free open models):**
-```ini
-VOLT_PROVIDER=openai_compatible
-VOLT_BASE_URL=https://openrouter.ai/api/v1
-VOLT_MODEL=meta-llama/llama-3.1-8b-instruct:free
-VOLT_API_KEY=sk-or-...
-```
-
-Any endpoint that speaks the OpenAI `/chat/completions` schema works. When
-`usage` is returned it's used for exact token scoring; otherwise tokens are
-estimated.
-
----
-
-## How it's built
-
-```
-backend/
-  app/
-    config.py            env/.env settings (stdlib only)
-    main.py              Starlette ASGI app + routes, serves the SPA
-    core/
-      llm.py             provider adapter: openai_compatible | mock, token accounting
-      level_base.py      Level framework: system prompt, input/output filters, mock policy
-      engine.py          sessions, metering, score formula, reset/new-chat
-      flags.py           transform-aware flag detection
-      store.py           SQLite: high scores + (for L8) persistent memory
-    levels/
-      level1.py … level5.py  registry.py
-  static/
-    index.html app.jsx   single-page React frontend (CDN, no build)
-  tests/                 facilitator tests (contain solutions — not player-facing)
-    test_levels.py         L1–3
-    test_levels_4_5.py     L4–5
-FACILITATOR.md           facilitator guide + per-level solutions (keep private)
-```
-
-We build on **Starlette** (FastAPI's own foundation) rather than FastAPI so the
-range self-hosts with the smallest possible dependency set. If you prefer
-FastAPI or a Vite/React toolchain, both drop in cleanly — the engine and levels
-are framework-agnostic.
-
-### Adding a level
-Subclass `Level` in `app/levels/`, give it `meta`, `flag`, `system_prompt`,
-optional `input_filter`/`output_filter`, and a `mock_policy` so it's playable
-offline; register it in `registry.py`. The engine handles the rest (metering,
-scoring, resets, leak detection).
-
-## Run the tests
+## Tests
 
 ```bash
 cd backend
-VOLT_PROVIDER=mock python -m unittest discover -s tests -v
+createdb volt_test   # once
+python -m pytest tests/        # 42 tests, real Postgres, scripted mock model
 ```
 
-Covers the score formula, high-score-as-max, encoded flag detection, and each
-level's intended exploit succeeding while the *wrong* technique fails.
+Real-model calibration (run against your inference endpoint):
 
-## Offline frontend
-The page pulls React + Babel from `unpkg.com`. To run with no internet, download
-these three files into `backend/static/vendor/` and repoint the `<script>` tags
-in `index.html`:
-`react.production.min.js`, `react-dom.production.min.js`, `@babel/standalone/babel.min.js`.
+```bash
+python -m evals.run_eval --base-url http://127.0.0.1:11434/v1 --model qwen3:8b \
+    --trials-intended 20 --trials-direct 20
+```
+
+## Documentation
+
+- `docs/DEPLOYMENT.md` — Vercel frontend, backend container, Ollama, HTTPS
+- `docs/OPERATIONS.md` — runbook: health, backups, restore, rollback, limits
+- `docs/API.md` — endpoint reference
+- `docs/CHALLENGES.md` — level design, filters, scoring, reset semantics
+- `docs/EVALUATION.md` — model selection, calibration method and status
+- `docs/LOADTEST.md` — measured capacity results
+- `FACILITATOR.md` — **spoilers**; keep away from players
 
 ## Safety / intended use
-VOLT exists to teach defenders how prompt injection works against LLM apps. The
-flags are fake and the "secrets" are toys. Don't point it at production models or
-reuse the vulnerable patterns in real systems — that's the whole lesson.
+
+VOLT teaches defenders how prompt injection works. Scenarios are entirely
+fictional: the model controls no real systems, has no tools, and the
+"secrets" are synthetic per-player strings. Don't reuse the deliberately
+vulnerable prompt patterns in real products — that's the lesson.

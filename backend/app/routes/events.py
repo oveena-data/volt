@@ -111,7 +111,8 @@ async def event_detail(request: Request) -> JSONResponse:
             user.id, ev["id"]))
         payload = _event_payload(ev, enrolled)
         payload["server_time"] = datetime.now(timezone.utc).isoformat()
-        if not enrolled:
+        # challenge list is for enrolled players — and admins managing the event
+        if not enrolled and not user.is_admin:
             return JSONResponse({"event": payload, "challenges": []})
         rows = await conn.fetch(
             """SELECT ec.challenge_id, ec.points, ec.enabled, ec.opens_at, ec.closes_at,
@@ -120,10 +121,10 @@ async def event_detail(request: Request) -> JSONResponse:
                FROM event_challenges ec
                JOIN challenges c ON c.id = ec.challenge_id
                JOIN challenge_versions cv ON cv.id = ec.version_id
-               LEFT JOIN solves s ON s.user_id=$2 AND s.scope=$1::text
+               LEFT JOIN solves s ON s.user_id=$2 AND s.scope=$3
                                   AND s.challenge_id=ec.challenge_id
                WHERE ec.event_id=$1 ORDER BY c.number""",
-            ev["id"], user.id,
+            ev["id"], user.id, str(ev["id"]),
         )
         now = datetime.now(timezone.utc)
         challenges = []

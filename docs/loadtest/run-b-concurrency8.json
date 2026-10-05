@@ -1,0 +1,22 @@
+{
+  "players": 25,
+  "duration_s": 90.0,
+  "think_time_s": [
+    5.0,
+    12.0
+  ],
+  "turns_ok": 226,
+  "throughput_turns_per_s": 2.51,
+  "turn_latency_s": {
+    "p50": 1.221,
+    "p95": 2.54,
+    "p99": 3.747,
+    "max": 4.922,
+    "mean": 1.381
+  },
+  "max_simultaneous_turn_requests": 25,
+  "rate_limited_429": 0,
+  "queue_full_429": 0,
+  "errors": {},
+  "started_at": 1791167388.5331557
+}
