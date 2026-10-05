@@ -103,6 +103,19 @@ Sizing: one concurrent inference at a time per ~`VOLT_INFERENCE_CONCURRENCY`;
 see docs/LOADTEST.md for the measured relationship between concurrency,
 model latency and player experience.
 
+### Container verification status
+
+The shipped `backend/Dockerfile` was built and run in the release
+environment (sole build delta there: trusting that environment's
+TLS-intercepting proxy CA, which does not apply elsewhere). Verified in
+the container: dependency install from the lockfile, startup migration of
+a fresh database, challenge seeding, `/api/readyz` green against a live
+endpoint, registration round-trip, and the production fail-fast (mock
+provider / weak secret / dev DB password each abort startup with a FATAL
+log). `docker compose` end-to-end (with the real Ollama service) could not
+be executed there because model downloads were blocked; compose config is
+otherwise the same image + stock `postgres:16` / `ollama` images.
+
 ## Local all-in-one
 
 `docker compose up --build` starts Postgres + Ollama (auto-pulls the model)
