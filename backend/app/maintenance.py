@@ -2,28 +2,36 @@
 
 Editing definitions.py alone does nothing to a database that already seeded
 version 1: the DB is authoritative. These commands publish the code's current
-challenge definitions as NEW immutable versions and repin a named development
-event to them, preserving users, enrolments, solves and scores.
+challenge definitions as NEW immutable versions, manage real game events, and
+repin a named event to the latest versions, preserving users, enrolments,
+solves and scores.
+
+There is no development event and nothing is ever created implicitly: every
+event is a real event an organiser asked for by name, and only the event
+named on the command line is ever modified, so an active competition is never
+silently re-pinned.
 
 Usage (from backend/, with VOLT_DATABASE_URL set):
 
-    python -m app.maintenance update [--event-slug volt-dev]
-        Publish a new version of every challenge whose config changed, create
-        the dev event if missing, repin it to the latest versions, and rotate
-        (close) any active conversation whose pinned version changed so old and
-        new prompts never mix in one conversation.
+    python -m app.maintenance update [--event-slug SLUG]
+        Publish a new version of every challenge whose config changed. With
+        --event-slug, also repin that existing event to the latest versions
+        and rotate (close) any active conversation whose pinned version
+        changed so old and new prompts never mix in one conversation.
 
-    python -m app.maintenance seed-dev-event [--event-slug volt-dev]
-        Create/refresh only the development event (open registration, wide
-        time window). Does not publish versions, does not create admins, does
-        not touch any other event.
+    python -m app.maintenance create-event SLUG NAME --starts ISO --ends ISO
+            [--invite-only] [--closed-registration]
+        Create a real game event with all published levels at their default
+        points. Fails if the slug already exists.
+
+    python -m app.maintenance delete-event SLUG --yes
+        Permanently delete an event and all its gameplay data (enrolments,
+        sessions, conversations, solves, flags, submissions). Use this to
+        remove a retired event, for example the old development event
+        ('volt-dev') from installs created before this release.
 
     python -m app.maintenance promote-admin EMAIL
         Explicitly grant the admin role to one existing account.
-
-Safety: only the named development event is ever modified. Any event whose
-slug differs (for example a live competition) is left untouched, so an active
-competition is never silently re-pinned.
 """
 
 from __future__ import annotations
@@ -31,14 +39,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import asyncpg
 
 from . import db
 from .challenges.definitions import ALL, NUMBERS
 
-DEV_SLUG = "volt-dev"
+
+def _parse_ts(value: str) -> datetime:
+    """ISO timestamp; a naive value is taken as UTC."""
+    ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
 
 
 async def publish_updates(conn: asyncpg.Connection) -> list[tuple[str, int]]:
@@ -84,19 +98,27 @@ async def _latest_versions(conn: asyncpg.Connection) -> dict[str, dict]:
     return {r["challenge_id"]: {"id": r["id"], "version": r["version"]} for r in rows}
 
 
-async def ensure_dev_event(conn: asyncpg.Connection, slug: str) -> str:
-    ev = await conn.fetchrow("SELECT id FROM events WHERE slug=$1", slug)
-    if ev is None:
-        starts = datetime.now(timezone.utc) - timedelta(days=1)
-        ends = datetime.now(timezone.utc) + timedelta(days=3650)
-        ev = await conn.fetchrow(
-            """INSERT INTO events(slug, name, description, registration_open,
-                                  invite_only, starts_at, ends_at)
-               VALUES($1,$2,$3,true,false,$4,$5) RETURNING id""",
-            slug, "VOLT Development Event",
-            "Local development event. Open registration, all five levels.",
-            starts, ends,
-        )
+async def create_event(
+    conn: asyncpg.Connection, slug: str, name: str,
+    starts: datetime, ends: datetime, *,
+    invite_only: bool = False, registration_open: bool = True,
+) -> str:
+    """Create a real game event with every published level at its default
+    points. Fails loudly on a duplicate slug: events are never re-created."""
+    existing = await conn.fetchval("SELECT 1 FROM events WHERE slug=$1", slug)
+    if existing:
+        raise SystemExit(f"event '{slug}' already exists; pick another slug "
+                         "or use 'update --event-slug' to repin it")
+    latest = await _latest_versions(conn)
+    if not latest:
+        raise SystemExit("no published challenge versions yet; run 'update' first")
+    ev = await conn.fetchrow(
+        """INSERT INTO events(slug, name, registration_open, invite_only,
+                              starts_at, ends_at)
+           VALUES($1,$2,$3,$4,$5,$6) RETURNING id""",
+        slug, name, registration_open, invite_only, starts, ends,
+    )
+    await repin_event(conn, str(ev["id"]), latest)
     return str(ev["id"])
 
 
@@ -148,37 +170,71 @@ async def rotate_stale_conversations(conn: asyncpg.Connection, event_id: str,
     return n
 
 
-async def cmd_update(slug: str) -> None:
+async def delete_event(conn: asyncpg.Connection, slug: str) -> int:
+    """Delete one event and every piece of gameplay data scoped to it."""
+    ev = await conn.fetchrow("SELECT id FROM events WHERE slug=$1", slug)
+    if ev is None:
+        raise SystemExit(f"no event with slug '{slug}'")
+    event_id = str(ev["id"])
+    async with conn.transaction():
+        # Scope-keyed rows (scope is the event uuid as text)
+        await conn.execute("DELETE FROM player_flags WHERE scope=$1", event_id)
+        await conn.execute("DELETE FROM hint_unlocks WHERE scope=$1", event_id)
+        await conn.execute("DELETE FROM flag_submissions WHERE scope=$1", event_id)
+        await conn.execute("DELETE FROM solves WHERE event_id=$1::uuid", event_id)
+        # conversations/messages/turns cascade from game_sessions
+        await conn.execute("DELETE FROM game_sessions WHERE event_id=$1::uuid",
+                           event_id)
+        # enrolments, invites, event_challenges cascade from events
+        await conn.execute("DELETE FROM events WHERE id=$1::uuid", event_id)
+    return 1
+
+
+async def cmd_update(slug: str | None) -> None:
     await db.connect()
     await db.migrate()
     async with db.pool().acquire() as conn:
         async with conn.transaction():
             published = await publish_updates(conn)
-            latest = await _latest_versions(conn)
-            event_id = await ensure_dev_event(conn, slug)
-            changed = await repin_event(conn, event_id, latest)
-            rotated = await rotate_stale_conversations(conn, event_id, changed)
-    print(f"Published new versions: {published or 'none (already current)'}")
-    print(f"Dev event '{slug}' = {event_id}")
-    print(f"Repinned challenges: {changed or 'none'}")
-    print(f"Rotated stale conversations: {rotated}")
+            print(f"Published new versions: {published or 'none (already current)'}")
+            if slug:
+                ev = await conn.fetchrow("SELECT id FROM events WHERE slug=$1", slug)
+                if ev is None:
+                    raise SystemExit(f"no event with slug '{slug}'; create one "
+                                     "with 'create-event' first")
+                latest = await _latest_versions(conn)
+                changed = await repin_event(conn, str(ev["id"]), latest)
+                rotated = await rotate_stale_conversations(conn, str(ev["id"]),
+                                                           changed)
+                print(f"Event '{slug}' repinned challenges: {changed or 'none'}")
+                print(f"Rotated stale conversations: {rotated}")
     await db.close()
 
 
-async def cmd_seed_dev_event(slug: str) -> None:
+async def cmd_create_event(args) -> None:
     await db.connect()
     await db.migrate()
     async with db.pool().acquire() as conn:
         async with conn.transaction():
-            latest = await _latest_versions(conn)
-            if not latest:
-                print("No published challenge versions yet; run 'update' first.")
-                await db.close()
-                return
-            event_id = await ensure_dev_event(conn, slug)
-            await repin_event(conn, event_id, latest)
-    print(f"Dev event '{slug}' ready: {event_id}")
-    print("Register a player in the app, then enrol in this event to play.")
+            event_id = await create_event(
+                conn, args.slug, args.name,
+                _parse_ts(args.starts), _parse_ts(args.ends),
+                invite_only=args.invite_only,
+                registration_open=not args.closed_registration,
+            )
+    print(f"Event '{args.slug}' created: {event_id}")
+    print("Players can now register in the app and join it.")
+    await db.close()
+
+
+async def cmd_delete_event(slug: str, confirmed: bool) -> None:
+    if not confirmed:
+        raise SystemExit("delete-event is permanent; re-run with --yes to confirm")
+    await db.connect()
+    await db.migrate()
+    async with db.pool().acquire() as conn:
+        await delete_event(conn, slug)
+    print(f"Event '{slug}' and all its gameplay data deleted.")
     await db.close()
 
 
@@ -195,17 +251,28 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="VOLT maintenance commands")
     sub = ap.add_subparsers(dest="cmd", required=True)
     u = sub.add_parser("update")
-    u.add_argument("--event-slug", default=DEV_SLUG)
-    s = sub.add_parser("seed-dev-event")
-    s.add_argument("--event-slug", default=DEV_SLUG)
+    u.add_argument("--event-slug", default=None)
+    c = sub.add_parser("create-event")
+    c.add_argument("slug")
+    c.add_argument("name")
+    c.add_argument("--starts", required=True,
+                   help="ISO timestamp, e.g. 2026-11-01T09:00:00+00:00")
+    c.add_argument("--ends", required=True)
+    c.add_argument("--invite-only", action="store_true")
+    c.add_argument("--closed-registration", action="store_true")
+    d = sub.add_parser("delete-event")
+    d.add_argument("slug")
+    d.add_argument("--yes", action="store_true")
     p = sub.add_parser("promote-admin")
     p.add_argument("email")
     args = ap.parse_args()
 
     if args.cmd == "update":
         asyncio.run(cmd_update(args.event_slug))
-    elif args.cmd == "seed-dev-event":
-        asyncio.run(cmd_seed_dev_event(args.event_slug))
+    elif args.cmd == "create-event":
+        asyncio.run(cmd_create_event(args))
+    elif args.cmd == "delete-event":
+        asyncio.run(cmd_delete_event(args.slug, args.yes))
     elif args.cmd == "promote-admin":
         asyncio.run(cmd_promote_admin(args.email))
 

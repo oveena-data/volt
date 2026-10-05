@@ -15,7 +15,7 @@ from datetime import datetime
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from .. import db, providers
+from .. import db, providers, scoring
 from ..audit import record
 from ..errors import ApiError
 from ..schemas import (EventChallengeIn, EventIn, EventPatchIn, FreezeIn,
@@ -67,15 +67,23 @@ async def patch_event(request: Request) -> JSONResponse:
         ev = await conn.fetchrow("SELECT id FROM events WHERE id=$1::uuid", event_id)
         if ev is None:
             raise ApiError("unknown event", 404, code="not_found")
+        # Column names come from this fixed whitelist only; values are bound
+        # parameters. Unknown keys cannot reach the SQL string.
+        allowed = {"name", "description", "registration_open", "invite_only",
+                   "starts_at", "ends_at", "paused", "leaderboard_visible"}
         sets, args = [], []
         for key, val in updates.items():
+            if key not in allowed:
+                raise ApiError(f"field '{key}' cannot be updated", 422,
+                               code="validation_error")
             if key in ("starts_at", "ends_at"):
                 val = _ts(val, key)
             args.append(val)
             sets.append(f"{key}=${len(args)}")
         args.append(ev["id"])
         await conn.execute(
-            f"UPDATE events SET {', '.join(sets)} WHERE id=${len(args)}", *args)
+            f"UPDATE events SET {', '.join(sets)} WHERE id=${len(args)}",  # nosec B608: columns whitelisted above, values parameterised
+            *args)
         await record(conn, admin.id, "event.update", event_id, updates)
     return JSONResponse({"ok": True})
 
@@ -307,7 +315,8 @@ async def export_results(request: Request) -> PlainTextResponse:
         admin = await require_admin(conn, request)
         rows = await conn.fetch(
             """SELECT u.display_name, u.email, s.challenge_id, s.points,
-                      s.hints_cost, s.method, s.solved_at
+                      s.bonus, s.hints_cost, s.attempts, s.tokens_spent,
+                      s.method, s.solved_at
                FROM solves s JOIN users u ON u.id=s.user_id
                WHERE s.event_id=$1::uuid AND s.mode='ranked'
                ORDER BY s.solved_at""",
@@ -315,11 +324,14 @@ async def export_results(request: Request) -> PlainTextResponse:
         await record(conn, admin.id, "event.export", event_id, {"rows": len(rows)})
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["display_name", "email", "challenge_id", "points", "hints_cost",
-                "net_points", "method", "solved_at"])
+    w.writerow(["display_name", "email", "challenge_id", "points", "bonus",
+                "hints_cost", "net_points", "attempts", "tokens_spent",
+                "method", "solved_at"])
     for r in rows:
         w.writerow([r["display_name"], r["email"], r["challenge_id"], r["points"],
-                    r["hints_cost"], max(0, r["points"] - r["hints_cost"]),
+                    r["bonus"], r["hints_cost"],
+                    scoring.net_score(r["points"], r["bonus"], r["hints_cost"]),
+                    r["attempts"], r["tokens_spent"],
                     r["method"], r["solved_at"].isoformat()])
     return PlainTextResponse(buf.getvalue(), media_type="text/csv")
 

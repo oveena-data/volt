@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 import asyncpg
 
-from . import providers
+from . import providers, scoring
 from .challenges.filters import apply_input_filters, apply_output_filters
 from .challenges.seed import load_published_version
 from .config import settings
@@ -234,10 +234,42 @@ async def conversation_stats(conn: asyncpg.Connection, conversation_id: str) -> 
     return {"tokens": int(row["tokens"]), "attempts": int(row["attempts"])}
 
 
+async def challenge_stats(conn: asyncpg.Connection, user_id: str, scope: str,
+                          challenge_id: str) -> dict:
+    """Cumulative effort on a challenge in a scope, across ALL conversations
+    (a reset or new chat never clears it). Error turns are free; the winning
+    turn counts as an attempt."""
+    row = await conn.fetchrow(
+        """SELECT coalesce(sum(t.prompt_tokens + t.completion_tokens),0) AS tokens,
+                  count(*) FILTER (WHERE t.status IN ('done','blocked')) AS attempts
+           FROM turns t
+           JOIN conversations c ON c.id = t.conversation_id
+           JOIN game_sessions gs ON gs.id = c.game_session_id
+           WHERE gs.user_id=$1 AND gs.scope=$2 AND gs.challenge_id=$3""",
+        user_id, scope, challenge_id,
+    )
+    return {"tokens": int(row["tokens"]), "attempts": int(row["attempts"])}
+
+
+def solve_payload(solve: dict) -> dict:
+    """The one place a solve row becomes a client payload."""
+    return {
+        "solved_at": solve["solved_at"].isoformat(),
+        "method": solve["method"],
+        "points": solve["points"],
+        "bonus": solve.get("bonus", 0),
+        "attempts": solve.get("attempts", 0),
+        "tokens_spent": solve.get("tokens_spent", 0),
+        "net_points": scoring.net_score(solve["points"], solve.get("bonus", 0),
+                                        solve["hints_cost"]),
+    }
+
+
 async def scope_solved(conn: asyncpg.Connection, user_id: str, scope: str,
                        challenge_id: str) -> dict | None:
     row = await conn.fetchrow(
-        """SELECT points, hints_cost, solved_at, method FROM solves
+        """SELECT points, hints_cost, bonus, attempts, tokens_spent,
+                  solved_at, method FROM solves
            WHERE user_id=$1 AND scope=$2 AND challenge_id=$3""",
         user_id, scope, challenge_id,
     )
@@ -248,22 +280,30 @@ async def _record_solve(
     conn: asyncpg.Connection, user_id: str, access: ChallengeAccess,
     method: str, turn_id: str | None,
 ) -> dict:
-    """Atomic: one solve per (user, scope, challenge); hint costs are captured
-    at solve time inside the same transaction."""
+    """Atomic: one solve per (user, scope, challenge). Hint costs, cumulative
+    attempts/tokens and the efficiency bonus are all captured at solve time
+    inside the same transaction (see app/scoring.py)."""
     async with conn.transaction():
         hints_cost = await conn.fetchval(
             """SELECT coalesce(sum(cost),0) FROM hint_unlocks
                WHERE user_id=$1 AND scope=$2 AND challenge_id=$3""",
             user_id, access.scope, access.challenge_id,
         )
+        effort = await challenge_stats(conn, user_id, access.scope,
+                                       access.challenge_id)
+        bonus = scoring.efficiency_bonus(access.points, effort["attempts"],
+                                         effort["tokens"])
         row = await conn.fetchrow(
             """INSERT INTO solves(user_id, challenge_id, scope, event_id, mode,
-                                  method, points, hints_cost, turn_id)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                                  method, points, hints_cost, turn_id,
+                                  attempts, tokens_spent, bonus)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                ON CONFLICT (user_id, scope, challenge_id) DO NOTHING
-               RETURNING points, hints_cost, solved_at, method""",
+               RETURNING points, hints_cost, bonus, attempts, tokens_spent,
+                         solved_at, method""",
             user_id, access.challenge_id, access.scope, access.event_id,
             access.mode, method, access.points, int(hints_cost), turn_id,
+            effort["attempts"], effort["tokens"], bonus,
         )
     if row is None:  # already solved earlier — keep the original record
         return await scope_solved(conn, user_id, access.scope, access.challenge_id)

@@ -125,5 +125,13 @@ export interface SessionState {
   tokens: number
   attempts: number
   solved: boolean
-  solve: { solved_at: string; net_points: number; method: string } | null
+  solve: {
+    solved_at: string
+    net_points: number
+    method: string
+    points?: number
+    bonus?: number
+    attempts?: number
+    tokens_spent?: number
+  } | null
 }

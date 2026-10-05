@@ -42,11 +42,11 @@ export default function Admin() {
             <div className="card" key={ev.id}>
               <h3>{ev.name}</h3>
               <div className="dim">
-                {new Date(ev.starts_at).toLocaleString()} →{' '}
+                {new Date(ev.starts_at).toLocaleString()} to{' '}
                 {new Date(ev.ends_at).toLocaleString()}
               </div>
               <div className="dim">
-                {ev.paused ? '⏸ paused · ' : ''}
+                {ev.paused ? 'paused · ' : ''}
                 {ev.invite_only ? 'invite-only · ' : ''}
                 {ev.registration_open ? 'registration open' : 'registration closed'}
                 {ev.leaderboard_frozen ? ' · leaderboard frozen' : ''}
@@ -110,9 +110,9 @@ function CreateEvent({ onDone, onErr }:
         ends_at: new Date(form.ends_at).toISOString(),
       }
       const r = await api.post('/api/admin/events', body)
-      // sensible default: offer all five levels at their default points
+      // sensible default: offer all five levels at their escalating defaults
       const defaults: [string, number][] = [
-        ['l1', 100], ['l2', 150], ['l3', 200], ['l4', 250], ['l5', 300]]
+        ['l1', 100], ['l2', 200], ['l3', 350], ['l4', 550], ['l5', 800]]
       for (const [cid, pts] of defaults) {
         await api.post(`/api/admin/events/${r.id}/challenges`,
           { challenge_id: cid, points: pts })
@@ -148,7 +148,7 @@ function CreateEvent({ onDone, onErr }:
         {' '}Invite-only
       </label>
       <button className="btn primary">
-        Create event (levels 1–5 at default points)
+        Create event (levels 1-5 at default points)
       </button>
     </form>
   )
@@ -290,7 +290,7 @@ function ManageEvent({ ev, run }: {
               <td>{new Date(a.at).toLocaleTimeString()}</td>
               <td>{a.actor}</td>
               <td>{a.action}</td>
-              <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+              <td style={{ fontSize: 12 }}>
                 {JSON.stringify(a.details)}</td>
             </tr>
           ))}

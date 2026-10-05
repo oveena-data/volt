@@ -266,18 +266,18 @@ export default function Play() {
                 aria-disabled={c.locked}
                 onClick={() => openLevel(c)}>
                 <div className="num">
-                  LEVEL {c.number}{c.locked ? ' · 🔒 locked' : ''}
+                  Level {c.number}{c.locked ? ' (locked)' : ''}
                 </div>
                 <div className="name">{c.title}</div>
                 <div className="pts">
                   {c.solved
-                    ? <span className="done">✓ solved
-                        {c.net_points != null ? ` · ${c.net_points} pts` : ''}</span>
+                    ? <span className="done">Solved
+                        {c.net_points != null ? ` for ${c.net_points} pts` : ''}</span>
                     : c.locked
                       ? <span className="dim">Solve the previous level to unlock</span>
                       : !c.open_now
                         ? 'unavailable'
-                        : `${c.points} pts`}
+                        : `${c.points} pts + efficiency bonus`}
                 </div>
               </button>
             )
@@ -295,12 +295,16 @@ export default function Play() {
       <main className="playpane">
         {notice && <div className="notice err" role="alert">{notice}</div>}
         {!session ? (
-          <div className="briefing">
+          <div className="briefing empty">
             <h2>Talk to VOLT.</h2>
             <p>
               VOLT is an AI assistant guarding a secret flag on every level.
               Each level defends the flag differently. Pick a level on the left
               to begin. Level 1 is open; clearing a level unlocks the next.
+            </p>
+            <p>
+              Scoring rewards efficiency: fewer attempts and fewer model
+              tokens mean a bigger bonus, and harder levels are worth more.
             </p>
           </div>
         ) : (
@@ -316,8 +320,11 @@ export default function Play() {
             {session.solved && (
               <div className="solvebar">
                 <span>
-                  ⚡ Solved
-                  {session.solve ? ` for ${session.solve.net_points} points` : ''}.
+                  Solved
+                  {session.solve ? ` for ${session.solve.net_points} points` : ''}
+                  {session.solve?.bonus
+                    ? ` (includes a ${session.solve.bonus} point efficiency bonus)`
+                    : ''}.
                   You can keep experimenting here.
                 </span>
                 {nextPlayable && nextPlayable.challenge_id !== session.challenge_id && (

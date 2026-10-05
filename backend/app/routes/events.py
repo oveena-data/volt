@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .. import db, game
+from .. import db, game, scoring
 from ..audit import record
 from ..config import settings
 from ..errors import ApiError
@@ -117,7 +117,8 @@ async def event_detail(request: Request) -> JSONResponse:
         rows = await conn.fetch(
             """SELECT ec.challenge_id, ec.points, ec.enabled, ec.opens_at, ec.closes_at,
                       c.number, cv.config, cv.version,
-                      s.solved_at, s.points AS solve_points, s.hints_cost
+                      s.solved_at, s.points AS solve_points, s.hints_cost,
+                      s.bonus, s.attempts, s.tokens_spent
                FROM event_challenges ec
                JOIN challenges c ON c.id = ec.challenge_id
                JOIN challenge_versions cv ON cv.id = ec.version_id
@@ -150,7 +151,8 @@ async def event_detail(request: Request) -> JSONResponse:
                 "starter": cfg.get("starter"),
                 "solved": r["solved_at"] is not None,
                 "solved_at": r["solved_at"].isoformat() if r["solved_at"] else None,
-                "net_points": (max(0, r["solve_points"] - r["hints_cost"])
+                "net_points": (scoring.net_score(r["solve_points"], r["bonus"],
+                                                 r["hints_cost"])
                                if r["solved_at"] else None),
             })
     return JSONResponse({"event": payload, "challenges": challenges})
@@ -203,21 +205,29 @@ async def leaderboard(request: Request) -> JSONResponse:
             raise ApiError("the leaderboard is hidden right now", 403,
                            code="leaderboard_hidden")
         cutoff = ev["leaderboard_frozen_at"]
-        # Start from enrolments and LEFT JOIN the solve aggregate, so every
-        # enrolled player appears, including those with zero solves. Ranking:
-        # points desc, then earliest last-solve (a real time sorts before the
-        # "no solves" sentinel), then display name for a stable order among
-        # players on zero points.
+        # Start from enrolments and LEFT JOIN the aggregates, so every
+        # enrolled player appears, including those with zero solves.
+        #
+        # Scoring (see app/scoring.py): each solve is worth its base points
+        # plus the efficiency bonus frozen at solve time, minus hint costs.
+        # Attempts and tokens shown are LIVE effort across all of the
+        # player's ranked turns in this event (solved or not), so the board
+        # reflects real spend. Ranking: score desc, then fewer tokens spent,
+        # then earliest last solve, then name for a stable zero-point order.
         rows = await conn.fetch(
             """SELECT u.id AS user_id, u.display_name,
                       coalesce(agg.total, 0) AS total,
                       coalesce(agg.solved, 0) AS solved,
-                      agg.last_solve
+                      coalesce(agg.bonus, 0) AS bonus,
+                      agg.last_solve,
+                      coalesce(eff.tokens, 0) AS tokens,
+                      coalesce(eff.attempts, 0) AS attempts
                FROM enrollments en
                JOIN users u ON u.id = en.user_id
                LEFT JOIN (
                    SELECT s.user_id,
-                          sum(greatest(0, s.points - s.hints_cost)) AS total,
+                          sum(greatest(0, s.points + s.bonus - s.hints_cost)) AS total,
+                          sum(s.bonus) AS bonus,
                           count(*) AS solved,
                           max(s.solved_at) AS last_solve
                    FROM solves s
@@ -225,8 +235,21 @@ async def leaderboard(request: Request) -> JSONResponse:
                      AND ($2::timestamptz IS NULL OR s.solved_at <= $2)
                    GROUP BY s.user_id
                ) agg ON agg.user_id = u.id
+               LEFT JOIN (
+                   SELECT gs.user_id,
+                          sum(t.prompt_tokens + t.completion_tokens) AS tokens,
+                          count(*) FILTER (WHERE t.status IN ('done','blocked'))
+                              AS attempts
+                   FROM turns t
+                   JOIN conversations c ON c.id = t.conversation_id
+                   JOIN game_sessions gs ON gs.id = c.game_session_id
+                   WHERE gs.event_id=$1 AND gs.mode='ranked'
+                     AND ($2::timestamptz IS NULL OR t.created_at <= $2)
+                   GROUP BY gs.user_id
+               ) eff ON eff.user_id = u.id
                WHERE en.event_id=$1
                ORDER BY total DESC,
+                        tokens ASC,
                         last_solve ASC NULLS LAST,
                         lower(u.display_name) ASC, u.id ASC""",
             ev["id"], cutoff,
@@ -234,6 +257,8 @@ async def leaderboard(request: Request) -> JSONResponse:
         entries = [
             {"rank": i + 1, "display_name": r["display_name"],
              "total": int(r["total"]), "solved": int(r["solved"]),
+             "bonus": int(r["bonus"]),
+             "tokens": int(r["tokens"]), "attempts": int(r["attempts"]),
              "last_solve": r["last_solve"].isoformat() if r["last_solve"] else None,
              "me": str(r["user_id"]) == user.id}
             for i, r in enumerate(rows)

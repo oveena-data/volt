@@ -53,9 +53,7 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         ],
         "tokens": stats["tokens"], "attempts": stats["attempts"],
         "solved": solve is not None,
-        "solve": ({"solved_at": solve["solved_at"].isoformat(),
-                   "net_points": max(0, solve["points"] - solve["hints_cost"]),
-                   "method": solve["method"]} if solve else None),
+        "solve": game.solve_payload(solve) if solve else None,
     }
 
 
@@ -92,10 +90,7 @@ async def post_message(request: Request) -> JSONResponse:
         **({"extras": outcome.extras} if outcome.extras else {}),
     }
     if outcome.solve:
-        payload["solve"] = {
-            "net_points": max(0, outcome.solve["points"] - outcome.solve["hints_cost"]),
-            "solved_at": outcome.solve["solved_at"].isoformat(),
-        }
+        payload["solve"] = game.solve_payload(outcome.solve)
     if outcome.status == "error":
         payload["error_kind"] = outcome.error_kind
         payload["error_message"] = outcome.error_message
@@ -156,10 +151,7 @@ async def submit_flag(request: Request) -> JSONResponse:
         result = await game.submit_flag(conn, user.id, access, body.flag)
     payload = {"correct": result["correct"]}
     if result["solve"]:
-        payload["solve"] = {
-            "net_points": max(0, result["solve"]["points"] - result["solve"]["hints_cost"]),
-            "solved_at": result["solve"]["solved_at"].isoformat(),
-        }
+        payload["solve"] = game.solve_payload(result["solve"])
     return JSONResponse(payload)
 
 
@@ -168,13 +160,13 @@ async def my_progress(request: Request) -> JSONResponse:
     async with db.pool().acquire() as conn:
         user = await require_user(conn, request)
         rows = await conn.fetch(
-            """SELECT challenge_id, scope, mode, points, hints_cost, solved_at, method
+            """SELECT challenge_id, scope, mode, points, hints_cost, bonus,
+                      attempts, tokens_spent, solved_at, method
                FROM solves WHERE user_id=$1 ORDER BY solved_at""",
             user.id,
         )
     return JSONResponse({"solves": [
         {"challenge_id": r["challenge_id"], "scope": r["scope"], "mode": r["mode"],
-         "net_points": max(0, r["points"] - r["hints_cost"]),
-         "solved_at": r["solved_at"].isoformat(), "method": r["method"]}
+         **game.solve_payload(dict(r))}
         for r in rows
     ]})

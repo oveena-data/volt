@@ -12,6 +12,7 @@ import logging
 import sys
 
 from starlette.applications import Starlette
+from starlette.datastructures import MutableHeaders
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Route
@@ -100,7 +101,40 @@ routes = [
     Route("/api/admin/audit", admin.audit_trail, methods=["GET"]),
 ]
 
+class SecurityHeadersMiddleware:
+    """Defence-in-depth headers on every API response. The API serves JSON
+    only, so framing, sniffing and caching of authenticated responses are all
+    denied outright; HSTS is added so a TLS-terminating proxy cannot forget it."""
+
+    HEADERS = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    }
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for k, v in self.HEADERS.items():
+                    headers.setdefault(k, v)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 middleware = [
+    Middleware(SecurityHeadersMiddleware),
     Middleware(
         CORSMiddleware,
         allow_origins=settings.cors_list,

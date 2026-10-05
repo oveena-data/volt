@@ -27,13 +27,26 @@ player text
 
 ## Scoring
 
-Fixed points per challenge (event-configurable; defaults 100/150/200/250/300)
-minus explicit hint deductions captured at solve time. One ranked solve per
-player/event/challenge, enforced by a unique constraint in the same
-transaction that captures hint costs. Ranking: total net points desc, then
-earliest time of reaching that total (earliest last-solve). Tokens and
-attempts are efficiency statistics only. Practice is a separate scope and
-never touches ranked scores; practice hints are free.
+Score per solve = base points + efficiency bonus - hint deductions, floored
+at zero (engine: `backend/app/scoring.py`).
+
+- **Base points** are event-configurable; defaults escalate with difficulty:
+  100/200/350/550/800 for levels 1-5, so a harder level is always worth
+  strictly more.
+- **Efficiency bonus**: the pool is half the base. It decays by 20 points per
+  attempt after the first and by 1 point per 400 model tokens spent on the
+  level, measured across every conversation in that scope (resets cannot
+  launder effort) and frozen into the solve row at solve time. It never goes
+  negative: a long grind still earns the full base.
+- One ranked solve per player/event/challenge, enforced by a unique
+  constraint in the same transaction that captures hint costs, attempts,
+  tokens and the bonus.
+- Ranking: total score desc, then fewer tokens spent, then earliest
+  last-solve. The leaderboard also shows live attempts and tokens across all
+  of a player's ranked turns in the event.
+
+Practice is a separate scope and never touches ranked scores; practice hints
+are free.
 
 **Reset vs replay:** Reset destroys the conversation and all accumulated
 level state (L3 fragments die; from L8, persistent memory too) and zeroes
@@ -93,13 +106,14 @@ pattern-matched the attack. For real-model play:
    inference time. They appear nowhere else: not in configs, logs, error
    messages, public payloads, or the frontend bundle (verified by
    `test_no_flag_or_prompt_leaks_in_player_payloads`).
-6. **No hints.** Hint content is removed from every level. Scoring is fixed
-   points per challenge (100/150/200/250/300 by default); tokens and attempts
-   remain visible efficiency stats.
-7. **Leaderboard** is built from enrolments LEFT JOIN the solve aggregate, so
-   every enrolled player appears, including those with zero solves ("Not
-   yet"). Ranking: points desc, then earliest last-solve, then display name
-   for a stable order among zero-point players.
+6. **No hints.** Hint content is removed from every level. Scoring is base
+   points per challenge (100/200/350/550/800 by default) plus an efficiency
+   bonus that rewards fewer attempts and fewer tokens (see Scoring above).
+7. **Leaderboard** is built from enrolments LEFT JOIN the solve and effort
+   aggregates, so every enrolled player appears, including those with zero
+   solves ("Not yet"). Ranking: score desc, then fewer tokens spent, then
+   earliest last-solve, then display name for a stable order among
+   zero-point players.
 
 ## Per-level defences
 

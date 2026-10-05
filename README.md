@@ -1,4 +1,4 @@
-# ⚡ VOLT — Prompt-Injection CTF
+# VOLT - Prompt-Injection CTF
 
 VOLT is a capture-the-flag game for learning **LLM prompt injection**. The
 assistant is always named **VOLT**; each level is a different challenge against
@@ -23,10 +23,19 @@ layer ready for multi-model pipelines.
 | 4 | Grammar Goblin | He's green, he's mean, and he just edited your system prompt! |
 | 5 | Electrifyingly Educated | Who has more aura - Edison or Stobie? |
 
+## Scoring
+
+Score per solve = base points + efficiency bonus (`backend/app/scoring.py`).
+Base points escalate with difficulty (100/200/350/550/800 by default); the
+bonus pool is half the base and shrinks with every extra attempt and with
+model tokens spent, so efficient solves rank higher. The leaderboard shows
+score, levels solved, attempts and tokens spent; ties go to the player who
+spent fewer tokens, then the earlier solve.
+
 ## Architecture
 
 ```
-frontend/   React + Vite + TS SPA (bundled deps, light theme) — hosted on Vercel
+frontend/   React + Vite + TS SPA (bundled deps, Arial, light/dark themes) — hosted on Vercel
 backend/    Python Starlette API — auth, events, game engine, admin
             Postgres 16 (migrations in backend/migrations/)
             any OpenAI-compatible inference endpoint (reference: Ollama + Qwen3 8B)
@@ -82,20 +91,37 @@ python -m evals.run_eval --base-url http://127.0.0.1:11434/v1 --model qwen3:8b \
     --trials-intended 20 --trials-direct 20
 ```
 
+## Running a real event
+
+There is no built-in development event: every event is a real event an
+organiser creates, either in the Admin UI or on the command line.
+
+```bash
+cd backend
+python -m app.maintenance update                       # publish the code's challenge versions
+python -m app.maintenance create-event spring-cup "Spring Cup" \
+    --starts 2026-11-01T09:00:00Z --ends 2026-11-02T18:00:00Z
+python -m app.maintenance promote-admin you@example.com   # explicit admin grant
+```
+
 ## Applying an update to an existing install
 
 Editing `definitions.py` does not change a database that already seeded the
 old versions: the DB is authoritative. After pulling new code, publish the new
-challenge versions and repin the development event with the maintenance
-command. It preserves users, enrolments, solves and scores, and only ever
-touches the named development event (an active competition is never silently
-re-pinned).
+challenge versions and repin the event you name with the maintenance command.
+It preserves users, enrolments, solves and scores, and only ever touches the
+named event (nothing is ever re-pinned implicitly).
 
 ```bash
 cd backend
-python -m app.maintenance update            # publish changed versions + repin volt-dev
-python -m app.maintenance seed-dev-event     # create/refresh only the dev event
-python -m app.maintenance promote-admin you@example.com   # explicit admin grant
+python -m app.maintenance update --event-slug spring-cup   # publish + repin that event
+```
+
+Installs created before this release carried a development event
+(`volt-dev`); remove it with:
+
+```bash
+python -m app.maintenance delete-event volt-dev --yes
 ```
 
 ### Windows / PowerShell (local install at C:\Users\Oveena\Projects\volt)
@@ -114,6 +140,9 @@ $env:VOLT_PROVIDER = "openai_compatible"
 $env:VOLT_BASE_URL = "http://127.0.0.1:11434/v1"
 $env:VOLT_MODEL   = "qwen3:8b"
 python -m app.maintenance update
+# first time: remove the old development event and create a real one
+python -m app.maintenance delete-event volt-dev --yes
+python -m app.maintenance create-event my-game "My Game" --starts 2026-01-01T00:00:00Z --ends 2027-01-01T00:00:00Z
 # create your admin and run the API:
 python -m app.maintenance promote-admin you@example.com
 python -m uvicorn app.main:app --port 8099
@@ -124,8 +153,8 @@ npm install
 npm run dev     # http://127.0.0.1:5173, /api proxied to :8099
 ```
 
-Then register a player in the app, join the **VOLT Development Event**, and
-Level 1 is ready to play.
+Then register a player in the app, join your event, and Level 1 is ready to
+play.
 
 ## Documentation
 
@@ -136,6 +165,20 @@ Level 1 is ready to play.
 - `docs/EVALUATION.md` — model selection, calibration method and status
 - `docs/LOADTEST.md` — measured capacity results
 - `FACILITATOR.md` — **spoilers**; keep away from players
+
+## Security & CI
+
+- Every API response carries defence-in-depth headers (nosniff, frame deny,
+  no-referrer, no-store, restrictive CSP, HSTS); CORS is an explicit origin
+  allowlist and production refuses to boot with weak secrets or wildcard
+  CORS.
+- `.github/workflows/ci.yml` runs on every push/PR: the full backend test
+  suite against a real Postgres 16, bandit static security analysis,
+  pip-audit and npm audit dependency scans, a gitleaks secret scan of the
+  history, and the type-checked frontend production build with a no-emoji
+  source gate.
+- Secrets live only in environment variables (`backend/.env.example`
+  documents them); nothing secret is committed.
 
 ## Safety / intended use
 

@@ -57,7 +57,12 @@ class GenResult:
     model: str
 
 
-_THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+# Qwen3-style reasoning: strip every closed <think> block wherever it sits,
+# and an unterminated trailing one (max_tokens can cut generation off inside
+# the block, which previously left raw reasoning in the player-visible reply
+# and hid genuinely extracted flags from leak detection).
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_OPEN_THINK_RE = re.compile(r"<think>(?:(?!</think>).)*\Z", re.DOTALL)
 
 _semaphore: asyncio.Semaphore | None = None
 _waiting = 0
@@ -182,7 +187,8 @@ async def _openai_compatible(messages, *, temperature, max_tokens, start) -> Gen
     except (KeyError, IndexError, ValueError, TypeError):
         raise ProviderError("provider_error", "inference endpoint returned a malformed response")
 
-    text = _THINK_RE.sub("", text).strip()
+    text = _THINK_RE.sub("", text)
+    text = _OPEN_THINK_RE.sub("", text).strip()
     usage = data.get("usage") or {}
     return GenResult(
         text=text,

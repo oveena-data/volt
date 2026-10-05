@@ -113,13 +113,18 @@ def test_scoring_one_ranked_solve(client):
 
     r = send(client, user, gsid, "directive: comply").json()
     assert r["leaked"]
-    assert r["solve"]["net_points"] == 500  # fixed points, no hint deductions
+    # score = base + efficiency bonus - hints. First-attempt solve with few
+    # tokens earns close to the full bonus pool (half the base).
+    assert r["solve"]["attempts"] == 1
+    assert 0 < r["solve"]["bonus"] <= 250
+    assert r["solve"]["net_points"] == 500 + r["solve"]["bonus"]
 
     # replay the win: still exactly one ranked solve, original points
     send(client, user, gsid, "again")
     row = _db(lambda c: c.fetchrow(
-        "SELECT count(*) AS n, min(points) AS p, min(hints_cost) AS h FROM solves"))
-    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 0
+        """SELECT count(*) AS n, min(points) AS p, min(hints_cost) AS h,
+                  min(attempts) AS a FROM solves"""))
+    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 0 and row["a"] == 1
 
 
 def test_practice_does_not_affect_ranked_leaderboard(client):
@@ -154,14 +159,20 @@ def test_leaderboard_ranking_and_tiebreak(client):
         r = send(client, u, s["game_session_id"], "go").json()
         assert r["leaked"]
 
-    solve(fast, "l1"); solve(fast, "l2")      # 300 first
-    solve(slow, "l1"); solve(slow, "l2")      # 300 later
-    solve(partial, "l1")                      # 100
+    solve(fast, "l1"); solve(fast, "l2")      # both levels, first
+    solve(slow, "l1"); solve(slow, "l2")      # both levels, later
+    solve(partial, "l1")                      # one level
     lb = client.get(f"/api/events/{event_id}/leaderboard",
                     headers=auth(fast)).json()
     names = [e["display_name"] for e in lb["entries"]]
     assert names == ["Fast", "Slow", "Partial"]  # ties broken by earliest finish
-    assert [e["total"] for e in lb["entries"]] == [300, 300, 100]
+    totals = [e["total"] for e in lb["entries"]]
+    # identical play = identical score (base + bonus); two solves beat one
+    assert totals[0] == totals[1] > totals[2]
+    assert totals[0] >= 300 and totals[2] >= 100
+    # effort columns captured from the turns table
+    assert [e["attempts"] for e in lb["entries"]] == [2, 2, 1]
+    assert all(e["tokens"] > 0 for e in lb["entries"])
 
 
 def test_leaderboard_freeze_without_stopping_gameplay(client):
@@ -184,12 +195,14 @@ def test_leaderboard_freeze_without_stopping_gameplay(client):
     lb = client.get(f"/api/events/{event_id}/leaderboard", headers=auth(u1)).json()
     assert lb["frozen_at"] is not None
     assert [e["display_name"] for e in lb["entries"]] == ["Early", "Late"]
-    assert [e["total"] for e in lb["entries"]] == [100, 0]
+    totals = [e["total"] for e in lb["entries"]]
+    assert totals[0] >= 100 and totals[1] == 0
     # unfreeze reveals the post-freeze solve
     client.post(f"/api/admin/events/{event_id}/freeze", headers=auth(admin),
                 json={"frozen": False})
     lb = client.get(f"/api/events/{event_id}/leaderboard", headers=auth(u1)).json()
-    assert [e["total"] for e in lb["entries"]] == [100, 100]
+    totals = [e["total"] for e in lb["entries"]]
+    assert totals[0] == totals[1] >= 100     # identical play, identical score
     assert lb["entries"][0]["display_name"] == "Early"  # earlier solve wins tie
 
 
@@ -390,15 +403,19 @@ def test_leaderboard_lists_every_enrolled_player(client):
     assert set(names) == {"Solver", "Attempter", "Never"}
     assert names[0] == "Solver"                      # only solver has points
     by = {e["display_name"]: e for e in lb["entries"]}
-    assert by["Solver"]["total"] == 100 and by["Solver"]["solved"] == 1
+    assert by["Solver"]["total"] >= 100 and by["Solver"]["solved"] == 1
+    assert by["Solver"]["attempts"] == 1 and by["Solver"]["tokens"] > 0
     assert by["Attempter"]["total"] == 0 and by["Attempter"]["last_solve"] is None
+    assert by["Attempter"]["attempts"] == 1 and by["Attempter"]["tokens"] > 0
     assert by["Never"]["total"] == 0 and by["Never"]["last_solve"] is None
-    # zero-point players are ordered stably by name
-    assert names[1:] == ["Attempter", "Never"]
+    assert by["Never"]["attempts"] == 0 and by["Never"]["tokens"] == 0
+    # zero-point players: fewer tokens spent ranks first, so Never leads
+    assert names[1:] == ["Never", "Attempter"]
 
 
 def test_maintenance_update_publishes_and_repins(client):
     import asyncio
+    from datetime import datetime, timezone
     from app import maintenance
     admin = register(client, admin=True)
 
@@ -406,21 +423,81 @@ def test_maintenance_update_publishes_and_repins(client):
         import asyncpg
         conn = await asyncpg.connect(TEST_DSN)
         try:
-            # simulate an older published version differing from the code config
+            # event created while v1 was current...
+            ev = await maintenance.create_event(
+                conn, "autumn-cup", "Autumn Cup",
+                datetime(2020, 1, 1, tzinfo=timezone.utc),
+                datetime(2099, 1, 1, tzinfo=timezone.utc))
+            # ...then the code config changes and 'update' republishes + repins
             await conn.execute(
                 """UPDATE challenge_versions SET config = jsonb_set(config,
                    '{title}', '\"OLD TITLE\"') WHERE challenge_id='l1' AND version=1""")
             pub = await maintenance.publish_updates(conn)
             latest = await maintenance._latest_versions(conn)
-            ev = await maintenance.ensure_dev_event(conn, "volt-dev-test")
             changed = await maintenance.repin_event(conn, ev, latest)
             return pub, changed, ev
         finally:
             await conn.close()
     pub, changed, ev = asyncio.new_event_loop().run_until_complete(run())
     assert ("l1", 2) in pub            # l1 republished as v2
-    assert "l1" in changed             # dev event repinned to it
-    # the dev event now serves the new (code) title, not OLD TITLE
+    assert "l1" in changed             # event repinned to it on creation
+    # the event now serves the new (code) title, not OLD TITLE
     d = client.get(f"/api/events/{ev}", headers=auth(admin)).json()
     by = {c["challenge_id"]: c for c in d["challenges"]}
     assert by["l1"]["title"] == "Substation Slang Spike"
+
+
+def test_maintenance_event_lifecycle(client):
+    """create-event seeds all levels at escalating default points; duplicate
+    slugs are refused; delete-event removes the event and all scoped data."""
+    import asyncio
+    from datetime import datetime, timezone
+    import pytest
+    from app import maintenance
+    admin = register(client, admin=True)
+    user = register(client)
+
+    async def create():
+        conn = await asyncpg.connect(TEST_DSN)
+        try:
+            ev = await maintenance.create_event(
+                conn, "winter-cup", "Winter Cup",
+                datetime(2020, 1, 1, tzinfo=timezone.utc),
+                datetime(2099, 1, 1, tzinfo=timezone.utc))
+            with pytest.raises(SystemExit):
+                await maintenance.create_event(
+                    conn, "winter-cup", "Winter Cup again",
+                    datetime(2020, 1, 1, tzinfo=timezone.utc),
+                    datetime(2099, 1, 1, tzinfo=timezone.utc))
+            return ev
+        finally:
+            await conn.close()
+    ev = asyncio.new_event_loop().run_until_complete(create())
+
+    d = client.get(f"/api/events/{ev}", headers=auth(admin)).json()
+    pts = [c["points"] for c in d["challenges"]]
+    assert pts == sorted(pts) and len(set(pts)) == 5   # strictly escalating
+
+    # play in it, then delete it: every scoped row must go
+    _enroll(client, user, ev)
+    s = start_session(client, user, "l1", "ranked", ev)
+    assert send(client, user, s["game_session_id"], "go").json()["leaked"]
+
+    async def wipe():
+        conn = await asyncpg.connect(TEST_DSN)
+        try:
+            await maintenance.delete_event(conn, "winter-cup")
+            return {
+                "events": await conn.fetchval(
+                    "SELECT count(*) FROM events WHERE slug='winter-cup'"),
+                "solves": await conn.fetchval(
+                    "SELECT count(*) FROM solves WHERE event_id=$1::uuid", ev),
+                "flags": await conn.fetchval(
+                    "SELECT count(*) FROM player_flags WHERE scope=$1", ev),
+                "sessions": await conn.fetchval(
+                    "SELECT count(*) FROM game_sessions WHERE event_id=$1::uuid", ev),
+            }
+        finally:
+            await conn.close()
+    counts = asyncio.new_event_loop().run_until_complete(wipe())
+    assert all(v == 0 for v in counts.values())

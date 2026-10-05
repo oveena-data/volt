@@ -29,7 +29,7 @@ export default function Auth({ onAuthed }: { onAuthed: () => void }) {
 
   return (
     <div className="authbox">
-      <h1>VOLT ⚡</h1>
+      <h1>VOLT</h1>
       <p className="sub">
         A capture-the-flag range for learning LLM prompt injection.
       </p>
@@ -55,7 +55,7 @@ export default function Auth({ onAuthed }: { onAuthed: () => void }) {
             onChange={e => setPassword(e.target.value)} />
         </label>
         <button className="btn primary" style={{ width: '100%' }} disabled={busy}>
-          {busy ? 'Working…' : mode === 'login' ? 'Sign in' : 'Create account'}
+          {busy ? 'Working...' : mode === 'login' ? 'Sign in' : 'Create account'}
         </button>
       </form>
       <p className="alt">

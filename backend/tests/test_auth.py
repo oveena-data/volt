@@ -5,6 +5,15 @@ import uuid
 from conftest import auth, register, send, start_session
 
 
+def test_security_headers_on_every_response(client):
+    r = client.get("/api/healthz")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["cache-control"] == "no-store"
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert "max-age" in r.headers["strict-transport-security"]
+
+
 def test_register_login_me_logout(client):
     user = register(client, name="Ada")
     r = client.get("/api/auth/me", headers=auth(user))
