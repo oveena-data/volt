@@ -1,4 +1,4 @@
-/* VOLT — light, spacious, quiet. */
+/* VOLT: light, spacious, quiet. */
 
 :root {
   --bg: #ffffff;
@@ -135,9 +135,6 @@ label.field > span {
   padding: 2px 10px; margin-left: 8px; vertical-align: middle;
 }
 .badge.solved { background: var(--good-soft); color: var(--good); }
-.badge.ranked { background: var(--accent-soft); color: var(--accent); }
-.badge.practice { background: var(--bg-soft); color: var(--text-dim);
-  border: 1px solid var(--border); }
 
 .hints { margin-top: 10px; }
 .hints details { margin-top: 6px; }
@@ -184,8 +181,13 @@ label.field > span {
 .solvebar {
   background: var(--good-soft); border: 1px solid #a7f3d0; color: var(--good);
   border-radius: var(--radius); padding: 10px 16px; margin-bottom: 12px;
-  font-size: 14px;
+  font-size: 14px; display: flex; align-items: center; gap: 14px;
+  justify-content: space-between; flex-wrap: wrap;
 }
+.level-item.locked { opacity: 0.6; }
+.level-item.locked .num { color: var(--text-dim); }
+.subtitle-line { color: var(--text-dim); font-style: italic; margin: 4px 0 0; }
+.dim { color: var(--text-dim); }
 
 .composer { border-top: 1px solid var(--border); padding-top: 14px; }
 .composer .row { display: flex; gap: 10px; align-items: flex-end; }

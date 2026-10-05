@@ -229,16 +229,16 @@ function ManageEvent({ ev, run }: {
               <td>{l.starts}</td>
               <td>{l.solves}</td>
               <td>{l.attempts}</td>
-              <td>{l.hints_unlocked} (−{l.hint_cost_total})</td>
+              <td>{l.hints_unlocked} (-{l.hint_cost_total})</td>
               <td>{l.error_turns}</td>
               <td>
                 {l.p50_latency_ms != null
                   ? `${Math.round(l.p50_latency_ms)} / ${Math.round(l.p95_latency_ms)} ms`
-                  : '—'}
+                  : 'n/a'}
               </td>
               <td>{l.tokens.toLocaleString()}</td>
               <td>{l.median_time_to_solve_s != null
-                ? `${Math.round(l.median_time_to_solve_s / 60)}m` : '—'}</td>
+                ? `${Math.round(l.median_time_to_solve_s / 60)}m` : 'n/a'}</td>
             </tr>
           ))}
         </tbody>

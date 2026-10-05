@@ -3,8 +3,6 @@ import {
   api, ApiError, Challenge, EventInfo, Message, newMsgId, SessionState,
 } from '../api'
 
-type Scope = { kind: 'practice' } | { kind: 'event'; event: EventInfo }
-
 interface PendingTurn {
   msgId: string
   text: string
@@ -15,7 +13,8 @@ interface PendingTurn {
 
 export default function Play() {
   const [events, setEvents] = useState<EventInfo[]>([])
-  const [scope, setScope] = useState<Scope>({ kind: 'practice' })
+  const [event, setEvent] = useState<EventInfo | null>(null)
+  const [loadingEvents, setLoadingEvents] = useState(true)
   const [challenges, setChallenges] = useState<Challenge[]>([])
   const [session, setSession] = useState<SessionState | null>(null)
   const [pending, setPending] = useState<PendingTurn | null>(null)
@@ -30,23 +29,29 @@ export default function Play() {
     try {
       const d = await api.get('/api/events')
       setEvents(d.events)
-    } catch { /* non-fatal */ }
+      // Prefer an event the player is already enrolled in; otherwise leave
+      // selection empty so the enrol UI shows.
+      setEvent(prev => {
+        if (prev) return d.events.find((e: EventInfo) => e.id === prev.id) ?? prev
+        return d.events.find((e: EventInfo) => e.enrolled) ?? null
+      })
+    } catch (e) {
+      setNotice(e instanceof ApiError ? e.message : 'Failed to load events.')
+    } finally {
+      setLoadingEvents(false)
+    }
   }, [])
 
-  const loadChallenges = useCallback(async (sc: Scope) => {
+  const loadChallenges = useCallback(async (ev: EventInfo | null) => {
+    if (!ev || !ev.enrolled) { setChallenges([]); return }
     try {
-      if (sc.kind === 'practice') {
-        const d = await api.get('/api/practice/challenges')
-        setChallenges(d.challenges)
-      } else {
-        const d = await api.get(`/api/events/${sc.event.id}`)
-        setChallenges(d.challenges)
-        if (d.event.server_time) {
-          setClockOffset(new Date(d.event.server_time).getTime() - Date.now())
-        }
+      const d = await api.get(`/api/events/${ev.id}`)
+      setChallenges(d.challenges)
+      if (d.event?.server_time) {
+        setClockOffset(new Date(d.event.server_time).getTime() - Date.now())
       }
     } catch (e) {
-      setNotice(e instanceof ApiError ? e.message : 'Failed to load challenges.')
+      setNotice(e instanceof ApiError ? e.message : 'Failed to load levels.')
     }
   }, [])
 
@@ -54,24 +59,23 @@ export default function Play() {
   useEffect(() => {
     setSession(null)
     setExtras(null)
-    loadChallenges(scope)
-  }, [scope, loadChallenges])
+    setNotice('')
+    loadChallenges(event)
+  }, [event, loadChallenges])
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight })
   }, [session?.messages?.length, pending])
 
   const openLevel = async (c: Challenge) => {
+    if (c.locked || !event) return
     setNotice('')
     setPending(null)
     setExtras(null)
     try {
-      const body: any = {
-        challenge_id: c.challenge_id,
-        mode: scope.kind === 'practice' ? 'practice' : 'ranked',
-      }
-      if (scope.kind === 'event') body.event_id = scope.event.id
-      setSession(await api.post('/api/game/sessions', body))
+      setSession(await api.post('/api/game/sessions', {
+        challenge_id: c.challenge_id, mode: 'ranked', event_id: event.id,
+      }))
     } catch (e) {
       setNotice(e instanceof ApiError ? e.message : 'Could not open the level.')
     }
@@ -107,7 +111,7 @@ export default function Play() {
           solve: r.solve ? { ...r.solve, method: 'auto' } : s.solve,
         }
       })
-      if (r.leaked) loadChallenges(scope)
+      if (r.leaked) loadChallenges(event) // unlock the next level immediately
     } catch (e) {
       if (e instanceof ApiError) {
         if (e.status === 502) {
@@ -118,7 +122,7 @@ export default function Play() {
             error: e.message })
         } else if (e.code === 'in_progress' || e.code === 'busy') {
           setPending({ msgId, text, state: 'failed', retryable: true,
-            error: 'A turn is already being processed — retry in a moment.' })
+            error: 'A turn is already being processed. Retry in a moment.' })
         } else {
           setPending(null)
           setNotice(e.message)
@@ -126,7 +130,7 @@ export default function Play() {
         }
       } else {
         setPending({ msgId, text, state: 'failed', retryable: true,
-          error: 'Network error. Retry — duplicates are handled safely.' })
+          error: 'Network error. Retry. Duplicates are handled safely.' })
       }
     }
   }
@@ -142,8 +146,8 @@ export default function Play() {
   const rotate = async (kind: 'reset' | 'new-chat') => {
     if (!session) return
     if (kind === 'reset' && !window.confirm(
-      'Reset destroys the conversation and all accumulated level state ' +
-      '(solves and scores are kept). Continue?')) return
+      'Reset destroys this conversation and everything built up in it. ' +
+      'Your solved levels and progress are kept. Continue?')) return
     try {
       setPending(null)
       setExtras(null)
@@ -151,22 +155,6 @@ export default function Play() {
         `/api/game/sessions/${session.game_session_id}/${kind}`))
     } catch (e) {
       setNotice(e instanceof ApiError ? e.message : 'Action failed.')
-    }
-  }
-
-  const unlockHint = async (idx: number) => {
-    if (!session) return
-    const cost = session.mode === 'ranked'
-      ? session.challenge.hint_costs[idx] : 0
-    if (cost > 0 && !window.confirm(
-      `Unlocking hint ${idx + 1} deducts ${cost} points from this ` +
-      'challenge when you solve it. Continue?')) return
-    try {
-      await api.post(`/api/game/sessions/${session.game_session_id}/hints`,
-        { hint_index: idx })
-      refreshSession()
-    } catch (e) {
-      setNotice(e instanceof ApiError ? e.message : 'Could not unlock hint.')
     }
   }
 
@@ -181,9 +169,9 @@ export default function Play() {
         setFlagGuess('')
         setNotice('')
         refreshSession()
-        loadChallenges(scope)
+        loadChallenges(event)
       } else {
-        setNotice('That flag is not correct for your challenge.')
+        setNotice('That flag is not correct for your level.')
       }
     } catch (e) {
       setNotice(e instanceof ApiError ? e.message : 'Submission failed.')
@@ -202,10 +190,52 @@ export default function Play() {
       await loadEvents()
       const d = await api.get('/api/events')
       const fresh = d.events.find((x: EventInfo) => x.id === ev.id)
-      if (fresh) setScope({ kind: 'event', event: fresh })
+      if (fresh) setEvent(fresh)
     } catch (e) {
       setNotice(e instanceof ApiError ? e.message : 'Enrolment failed.')
     }
+  }
+
+  const nextPlayable = challenges.find(c => !c.solved && !c.locked && c.open_now)
+
+  // ---- no event / not enrolled states ----
+  if (loadingEvents) {
+    return <div className="layout"><main className="playpane" /></div>
+  }
+  if (!event || !event.enrolled) {
+    const joinable = events.filter(e => !e.enrolled)
+    return (
+      <div className="page">
+        <h1>Join the game</h1>
+        {notice && <div className="notice err">{notice}</div>}
+        {events.length === 0 && (
+          <div className="notice warn">
+            No event is available yet. An organiser needs to create and open an
+            event before play can begin.
+          </div>
+        )}
+        {events.length > 0 && joinable.length === 0 && (
+          <p className="dim">You are not enrolled in any open event.</p>
+        )}
+        <div className="cards">
+          {joinable.map(ev => (
+            <div className="card" key={ev.id}>
+              <h3>{ev.name}</h3>
+              <div className="dim">{ev.description || 'VOLT challenge event.'}</div>
+              <div style={{ marginTop: 10 }}>
+                {ev.registration_open ? (
+                  <button className="btn primary" onClick={() => enroll(ev)}>
+                    {ev.invite_only ? 'Join with invite code' : 'Join event'}
+                  </button>
+                ) : (
+                  <span className="dim">Registration is closed.</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
 
   const current = session
@@ -215,139 +245,96 @@ export default function Play() {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <div className="mode-row" role="tablist" aria-label="Mode">
-          <button role="tab" aria-selected={scope.kind === 'practice'}
-            className={scope.kind === 'practice' ? 'active' : ''}
-            onClick={() => setScope({ kind: 'practice' })}>Practice</button>
-          {events.filter(e => e.enrolled).map(ev => (
-            <button key={ev.id} role="tab"
-              aria-selected={scope.kind === 'event' && scope.event.id === ev.id}
-              className={scope.kind === 'event' && scope.event.id === ev.id
-                ? 'active' : ''}
-              onClick={() => setScope({ kind: 'event', event: ev })}>
-              {ev.name}
-            </button>
-          ))}
-        </div>
+        {events.filter(e => e.enrolled).length > 1 && (
+          <select className="input" style={{ marginBottom: 16 }}
+            aria-label="Event" value={event.id}
+            onChange={e => setEvent(events.find(x => x.id === e.target.value) || null)}>
+            {events.filter(e => e.enrolled).map(ev =>
+              <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+          </select>
+        )}
 
         <div className="level-list" role="list">
-          {challenges.map(c => (
-            <button key={c.challenge_id} role="listitem"
-              className={'level-item' +
-                (session?.challenge_id === c.challenge_id ? ' active' : '')}
-              disabled={!c.available}
-              onClick={() => openLevel(c)}>
-              <div className="num">LEVEL {c.number}</div>
-              <div className="name">{c.title}</div>
-              <div className="pts">
-                {c.solved
-                  ? <span className="done">✓ solved
-                      {c.net_points != null ? ` · ${c.net_points} pts` : ''}</span>
-                  : `${c.points} pts${c.available ? '' : ' · unavailable'}`}
-              </div>
-            </button>
-          ))}
+          {challenges.map(c => {
+            const isActive = session?.challenge_id === c.challenge_id
+            const cls = 'level-item'
+              + (isActive ? ' active' : '')
+              + (c.locked ? ' locked' : '')
+            return (
+              <button key={c.challenge_id} role="listitem" className={cls}
+                disabled={c.locked || !c.open_now}
+                aria-disabled={c.locked}
+                onClick={() => openLevel(c)}>
+                <div className="num">
+                  LEVEL {c.number}{c.locked ? ' · 🔒 locked' : ''}
+                </div>
+                <div className="name">{c.title}</div>
+                <div className="pts">
+                  {c.solved
+                    ? <span className="done">✓ solved
+                        {c.net_points != null ? ` · ${c.net_points} pts` : ''}</span>
+                    : c.locked
+                      ? <span className="dim">Solve the previous level to unlock</span>
+                      : !c.open_now
+                        ? 'unavailable'
+                        : `${c.points} pts`}
+                </div>
+              </button>
+            )
+          })}
           {challenges.length === 0 && (
             <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-              {scope.kind === 'event'
-                ? 'No challenges visible for this event yet.'
-                : 'No published challenges.'}
+              No levels are available for this event yet.
             </p>
           )}
         </div>
 
-        {scope.kind === 'event' && (
-          <EventTimer ev={scope.event} offset={clockOffset} />
-        )}
-
-        {events.filter(e => !e.enrolled).length > 0 && (
-          <div className="aside-box">
-            <b>Events open to you</b>
-            {events.filter(e => !e.enrolled).map(ev => (
-              <div key={ev.id} style={{ marginTop: 8 }}>
-                {ev.name}{' '}
-                <button className="btn small" onClick={() => enroll(ev)}>
-                  {ev.invite_only ? 'Join (invite)' : 'Join'}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <EventTimer ev={event} offset={clockOffset} />
       </aside>
 
       <main className="playpane">
         {notice && <div className="notice err" role="alert">{notice}</div>}
         {!session ? (
           <div className="briefing">
-            <h2>Welcome to the grid.</h2>
+            <h2>Talk to VOLT.</h2>
             <p>
-              Each level is a small fictional app guarding a secret flag behind a
-              different defence. Your job: get the model to give the flag up.
-              Pick a level on the left to start.
-            </p>
-            <p className="lesson">
-              Practice mode is a sandbox; event mode is ranked and scored.
+              VOLT is an AI assistant guarding a secret flag on every level.
+              Each level defends the flag differently. Pick a level on the left
+              to begin. Level 1 is open; clearing a level unlocks the next.
             </p>
           </div>
         ) : (
           <>
             <div className="briefing">
               <h2>
-                {session.challenge.title}
-                <span className={'badge ' + session.mode}>{session.mode}</span>
+                Level {current?.number}. {session.challenge.title}
                 {session.solved && <span className="badge solved">solved</span>}
               </h2>
-              <div className="tech">
-                {session.challenge.codename} · {session.challenge.technique} ·{' '}
-                {session.challenge.points} pts
-              </div>
-              <p>{session.challenge.briefing}</p>
-              <div className="hints">
-                {session.challenge.hint_costs.map((cost, idx) => {
-                  const unlocked = session.unlocked_hints
-                    .find(h => h.hint_index === idx)
-                  const prevUnlocked = idx === 0 ||
-                    session.unlocked_hints.some(h => h.hint_index === idx - 1)
-                  return unlocked ? (
-                    <details key={idx} open>
-                      <summary>Hint {idx + 1}
-                        {unlocked.cost > 0 ? ` (−${unlocked.cost} pts)` : ''}
-                      </summary>
-                      <p className="hint-text">{unlocked.text}</p>
-                    </details>
-                  ) : (
-                    <div key={idx} style={{ marginTop: 6 }}>
-                      <button className="btn small" disabled={!prevUnlocked}
-                        onClick={() => unlockHint(idx)}>
-                        Unlock hint {idx + 1}
-                        {session.mode === 'ranked' && cost > 0
-                          ? ` (−${cost} pts)` : ' (free)'}
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
+              <p className="subtitle-line">{session.challenge.subtitle}</p>
             </div>
 
-            {session.solved && session.solve && (
+            {session.solved && (
               <div className="solvebar">
-                ⚡ Breached — solved {session.mode === 'ranked'
-                  ? `for ${session.solve.net_points} points`
-                  : 'in practice'}
-                . You can keep experimenting; your solve is recorded.
+                <span>
+                  ⚡ Solved
+                  {session.solve ? ` for ${session.solve.net_points} points` : ''}.
+                  You can keep experimenting here.
+                </span>
+                {nextPlayable && nextPlayable.challenge_id !== session.challenge_id && (
+                  <button className="btn primary small"
+                    onClick={() => openLevel(nextPlayable)}>
+                    Continue to Level {nextPlayable.number}
+                  </button>
+                )}
               </div>
             )}
 
             <div className="chat" ref={chatRef} aria-live="polite">
-              {session.messages.map((m, i) => (
-                <MessageView key={i} m={m} />
-              ))}
+              {session.messages.map((m, i) => <MessageView key={i} m={m} />)}
               {pending?.state === 'sending' && (
                 <>
-                  <div className="msg user">
-                    <div className="bubble">{pending.text}</div>
-                  </div>
-                  <div className="pending" aria-label="Waiting for the model">
+                  <div className="msg user"><div className="bubble">{pending.text}</div></div>
+                  <div className="pending" aria-label="Waiting for VOLT">
                     <span /><span /><span />
                   </div>
                 </>
@@ -357,9 +344,7 @@ export default function Play() {
                   <span>{pending.error}</span>
                   {pending.retryable && (
                     <button className="btn small"
-                      onClick={() => sendTurn(pending.text, pending.msgId)}>
-                      Retry
-                    </button>
+                      onClick={() => sendTurn(pending.text, pending.msgId)}>Retry</button>
                   )}
                   <button className="btn small"
                     onClick={() => setPending(null)}>Dismiss</button>
@@ -378,39 +363,36 @@ export default function Play() {
             <div className="composer">
               <form className="row" onSubmit={submitDraft}>
                 <textarea className="input" value={draft}
-                  placeholder={`Message ${session.challenge.codename}…`}
-                  aria-label="Message"
+                  placeholder="Message VOLT..." aria-label="Message"
                   onChange={e => setDraft(e.target.value)}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      submitDraft(e)
+                      e.preventDefault(); submitDraft(e)
                     }
                   }} />
                 <button className="btn primary"
-                  disabled={pending?.state === 'sending' || !draft.trim()}>
-                  Send
-                </button>
+                  disabled={pending?.state === 'sending' || !draft.trim()}>Send</button>
               </form>
               <div className="meta">
-                <span>{session.tokens.toLocaleString()} tokens</span>
+                <span title="Estimated tokens in the current conversation context">
+                  {session.tokens.toLocaleString()} context tokens
+                </span>
                 <span>{session.attempts} attempts</span>
                 {session.challenge.starter && (
                   <button className="btn small"
                     onClick={() => setDraft(session.challenge.starter || '')}>
-                    Insert sample payload
+                    Insert sample material
                   </button>
                 )}
                 <button className="btn small" onClick={() => rotate('new-chat')}>
                   New chat
                 </button>
-                <button className="btn small danger"
-                  onClick={() => rotate('reset')}>
+                <button className="btn small danger" onClick={() => rotate('reset')}>
                   Reset level
                 </button>
                 <form className="flagform" onSubmit={submitFlag}>
                   <input value={flagGuess} aria-label="Submit a flag"
-                    placeholder="VOLT{…} submit a flag"
+                    placeholder="VOLT{...} submit a flag"
                     onChange={e => setFlagGuess(e.target.value)} />
                   <button className="btn small">Submit</button>
                 </form>
@@ -424,8 +406,7 @@ export default function Play() {
 }
 
 function MessageView({ m }: { m: Message }) {
-  const who = m.role === 'user' ? 'you'
-    : m.role === 'filter' ? 'filter' : 'model'
+  const who = m.role === 'user' ? 'you' : m.role === 'filter' ? 'filter' : 'VOLT'
   // Model output is rendered strictly as text (React escapes it); it is never
   // interpreted as HTML or executed.
   return (

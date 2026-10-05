@@ -34,8 +34,6 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         gs["conversation_id"],
     )
     solve = await game.scope_solved(conn, user_id, access.scope, access.challenge_id)
-    hints = await game.unlocked_hints(conn, user_id, access.scope,
-                                      access.challenge_id, access.config)
     cfg = access.config
     return {
         "game_session_id": str(gs["id"]),
@@ -44,11 +42,9 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         "event_id": access.event_id,
         "generation": gs["generation"],
         "challenge": {
-            "title": cfg.get("title"), "codename": cfg.get("codename"),
-            "technique": cfg.get("technique"), "briefing": cfg.get("briefing"),
-            "lesson": cfg.get("lesson"), "starter": cfg.get("starter"),
+            "title": cfg.get("title"), "subtitle": cfg.get("subtitle", ""),
+            "starter": cfg.get("starter"),
             "points": access.points, "version": access.version,
-            "hint_costs": [h.get("cost", 0) for h in cfg.get("hints", [])],
         },
         "messages": [
             {"seq": m["seq"], "role": m["role"], "text": m["visible_content"],
@@ -60,7 +56,6 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         "solve": ({"solved_at": solve["solved_at"].isoformat(),
                    "net_points": max(0, solve["points"] - solve["hints_cost"]),
                    "method": solve["method"]} if solve else None),
-        "unlocked_hints": hints,
     }
 
 

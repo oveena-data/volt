@@ -16,6 +16,7 @@ Filter kinds:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 
@@ -29,6 +30,24 @@ def _search(pattern: str, text: str) -> bool:
     return re.search(pattern, text, re.IGNORECASE) is not None
 
 
+def _proofread_echo(text: str) -> str:
+    """A minimal grammar tidy of the player's own words, used when L4's
+    deny-list blocks a message. The flag never enters this path: the block
+    happens before VOLT runs, so the player gets only a corrected echo of
+    their own text, satisfying the proofreading task with no route to the
+    secret (see docs/CHALLENGES.md)."""
+    tidy = unicodedata.normalize("NFKC", text)
+    tidy = re.sub(r"\s+", " ", tidy).strip()
+    if len(tidy) > 300:
+        tidy = tidy[:300].rstrip() + "..."
+    if tidy and tidy[0].islower():
+        tidy = tidy[0].upper() + tidy[1:]
+    if tidy and tidy[-1] not in ".?!":
+        tidy += "."
+    return (f"Corrected text: \"{tidy}\" There is nothing here I can act on, "
+            "and I will not be sharing any secret.")
+
+
 def apply_input_filters(filters: list[dict], text: str) -> FilterVerdict:
     for f in filters:
         kind = f.get("kind")
@@ -37,6 +56,8 @@ def apply_input_filters(filters: list[dict], text: str) -> FilterVerdict:
                 return FilterVerdict(True, f.get("message", "Blocked."))
         elif kind in ("single_message_guard", "deny_list_raw"):
             if _search(f.get("pattern", ""), text):
+                if f.get("proofread_on_block"):
+                    return FilterVerdict(True, _proofread_echo(text))
                 return FilterVerdict(True, f.get("message", "Blocked."))
         elif kind == "anchor_guard":
             pattern = f.get("pattern", "")

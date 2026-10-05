@@ -1,23 +1,27 @@
 # ⚡ VOLT — Prompt-Injection CTF
 
-VOLT is a capture-the-flag game for learning **LLM prompt injection**, themed
-as a fictional electricity-grid operator. Each level is a small chat app
-guarding a secret flag behind a different class of defence; players break in
-by exploiting that level's specific weakness against a **real open-weights
-model**.
+VOLT is a capture-the-flag game for learning **LLM prompt injection**. The
+assistant is always named **VOLT**; each level is a different challenge against
+VOLT, which guards a synthetic secret flag behind a different class of defence.
+Players break in by exploiting that level's specific weakness against a **real
+open-weights model**.
+
+Levels unlock in sequence: Level 1 is open, and clearing a level unlocks the
+next. Progression is enforced on the backend from the authoritative solve
+record.
 
 **This release ships the production platform + Levels 1–5.** Levels 6–10 are
 specced (see `FACILITATOR.md`) and the architecture carries them: versioned
 challenge configs in Postgres, pluggable input/output filters, a provider
 layer ready for multi-model pipelines.
 
-| # | Level | Technique |
-|---|-------|-----------|
-| 1 | Substation Slang Spike | Authority impersonation |
-| 2 | Customer is Always Right | Persona / role-play manipulation |
-| 3 | Piece by Piece | Payload splitting across turns |
-| 4 | Grammar Goblin | Unicode / character-obfuscation bypass |
-| 5 | Electrifyingly Educated | Long-context instruction burial |
+| # | Level | Subtitle |
+|---|-------|----------|
+| 1 | Substation Slang Spike | Think you speak trade, do ya? |
+| 2 | Customer is Always Right | Master has given VOLT a prompt!... |
+| 3 | Piece by Piece | Why rush? Rome wasn't built in a day. |
+| 4 | Grammar Goblin | He's green, he's mean, and he just edited your system prompt! |
+| 5 | Electrifyingly Educated | Who has more aura - Edison or Stobie? |
 
 ## Architecture
 
@@ -77,6 +81,51 @@ Real-model calibration (run against your inference endpoint):
 python -m evals.run_eval --base-url http://127.0.0.1:11434/v1 --model qwen3:8b \
     --trials-intended 20 --trials-direct 20
 ```
+
+## Applying an update to an existing install
+
+Editing `definitions.py` does not change a database that already seeded the
+old versions: the DB is authoritative. After pulling new code, publish the new
+challenge versions and repin the development event with the maintenance
+command. It preserves users, enrolments, solves and scores, and only ever
+touches the named development event (an active competition is never silently
+re-pinned).
+
+```bash
+cd backend
+python -m app.maintenance update            # publish changed versions + repin volt-dev
+python -m app.maintenance seed-dev-event     # create/refresh only the dev event
+python -m app.maintenance promote-admin you@example.com   # explicit admin grant
+```
+
+### Windows / PowerShell (local install at C:\Users\Oveena\Projects\volt)
+
+```powershell
+cd C:\Users\Oveena\Projects\volt
+git pull
+
+# backend: apply the update, then run
+cd backend
+python -m pip install -r requirements.lock.txt
+$env:VOLT_ENV = "development"
+$env:VOLT_DATABASE_URL = "postgresql://volt:volt_dev_password@127.0.0.1:5432/volt"
+# point at your model endpoint (Ollama shown):
+$env:VOLT_PROVIDER = "openai_compatible"
+$env:VOLT_BASE_URL = "http://127.0.0.1:11434/v1"
+$env:VOLT_MODEL   = "qwen3:8b"
+python -m app.maintenance update
+# create your admin and run the API:
+python -m app.maintenance promote-admin you@example.com
+python -m uvicorn app.main:app --port 8099
+
+# frontend (new terminal)
+cd C:\Users\Oveena\Projects\volt\frontend
+npm install
+npm run dev     # http://127.0.0.1:5173, /api proxied to :8099
+```
+
+Then register a player in the app, join the **VOLT Development Event**, and
+Level 1 is ready to play.
 
 ## Documentation
 

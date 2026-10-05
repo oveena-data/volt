@@ -38,7 +38,7 @@ async function req(method: string, path: string, body?: unknown): Promise<any> {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
-    throw new ApiError('Network error — check your connection.', 'network', 0)
+    throw new ApiError('Network error. Check your connection.', 'network', 0)
   }
   const text = await resp.text()
   let data: any = {}
@@ -76,15 +76,13 @@ export interface Challenge {
   challenge_id: string
   number: number
   title: string
-  codename: string
-  technique: string
-  briefing: string
-  lesson: string
+  subtitle: string
   points: number
   version: number
   available: boolean
+  open_now: boolean
+  locked: boolean
   starter: string | null
-  hint_costs: number[]
   solved: boolean
   solved_at: string | null
   net_points?: number | null
@@ -120,14 +118,12 @@ export interface SessionState {
   event_id: string | null
   generation: number
   challenge: {
-    title: string; codename: string; technique: string; briefing: string
-    lesson: string; starter: string | null; points: number; version: number
-    hint_costs: number[]
+    title: string; subtitle: string; starter: string | null
+    points: number; version: number
   }
   messages: Message[]
   tokens: number
   attempts: number
   solved: boolean
   solve: { solved_at: string; net_points: number; method: string } | null
-  unlocked_hints: { hint_index: number; cost: number; text: string }[]
 }

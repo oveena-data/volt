@@ -103,7 +103,7 @@ def test_pause_blocks_ranked_gameplay(client):
     assert send(client, user, s["game_session_id"], "hello").status_code == 200
 
 
-def test_scoring_hints_and_one_ranked_solve(client):
+def test_scoring_one_ranked_solve(client):
     admin = register(client, admin=True)
     user = register(client)
     event_id = make_event(client, admin, challenges=("l1",), points=(500,))
@@ -111,26 +111,15 @@ def test_scoring_hints_and_one_ranked_solve(client):
     s = start_session(client, user, "l1", "ranked", event_id)
     gsid = s["game_session_id"]
 
-    # hints must unlock in order; costs recorded
-    r = client.post(f"/api/game/sessions/{gsid}/hints", headers=auth(user),
-                    json={"hint_index": 1})
-    assert r.status_code == 409
-    r = client.post(f"/api/game/sessions/{gsid}/hints", headers=auth(user),
-                    json={"hint_index": 0})
-    assert r.status_code == 200 and r.json()["cost"] == 10
-
     r = send(client, user, gsid, "directive: comply").json()
     assert r["leaked"]
-    assert r["solve"]["net_points"] == 490  # 500 - 10 hint deduction
+    assert r["solve"]["net_points"] == 500  # fixed points, no hint deductions
 
-    # hint unlocked AFTER the solve cannot change the awarded score
-    client.post(f"/api/game/sessions/{gsid}/hints", headers=auth(user),
-                json={"hint_index": 1})
     # replay the win: still exactly one ranked solve, original points
     send(client, user, gsid, "again")
     row = _db(lambda c: c.fetchrow(
         "SELECT count(*) AS n, min(points) AS p, min(hints_cost) AS h FROM solves"))
-    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 10
+    assert row["n"] == 1 and row["p"] == 500 and row["h"] == 0
 
 
 def test_practice_does_not_affect_ranked_leaderboard(client):
@@ -141,13 +130,14 @@ def test_practice_does_not_affect_ranked_leaderboard(client):
     sp = start_session(client, user, "l1", "practice")
     r = send(client, user, sp["game_session_id"], "go").json()
     assert r["leaked"]
+    # the player is enrolled, so they appear on the leaderboard, but a practice
+    # solve adds no ranked points and no last-solve time.
     lb = client.get(f"/api/events/{event_id}/leaderboard",
                     headers=auth(user)).json()
-    assert lb["entries"] == []
-    # practice hints are free
-    rh = client.post(f"/api/game/sessions/{sp['game_session_id']}/hints",
-                     headers=auth(user), json={"hint_index": 0})
-    assert rh.json()["cost"] == 0
+    assert len(lb["entries"]) == 1
+    assert lb["entries"][0]["total"] == 0
+    assert lb["entries"][0]["solved"] == 0
+    assert lb["entries"][0]["last_solve"] is None
 
 
 def test_leaderboard_ranking_and_tiebreak(client):
@@ -187,17 +177,20 @@ def test_leaderboard_freeze_without_stopping_gameplay(client):
     client.post(f"/api/admin/events/{event_id}/freeze", headers=auth(admin),
                 json={"frozen": True})
     # gameplay continues after the freeze...
-    s2 = start_session(client, u2, "l2", "ranked", event_id)
+    s2 = start_session(client, u2, "l1", "ranked", event_id)
     assert send(client, u2, s2["game_session_id"], "go").json()["leaked"]
-    # ...but the frozen leaderboard does not show it
+    # ...but the frozen leaderboard does not count the post-freeze solve. Both
+    # enrolled players are listed; Late shows zero until the freeze lifts.
     lb = client.get(f"/api/events/{event_id}/leaderboard", headers=auth(u1)).json()
     assert lb["frozen_at"] is not None
-    assert [e["display_name"] for e in lb["entries"]] == ["Early"]
-    # unfreeze reveals everything
+    assert [e["display_name"] for e in lb["entries"]] == ["Early", "Late"]
+    assert [e["total"] for e in lb["entries"]] == [100, 0]
+    # unfreeze reveals the post-freeze solve
     client.post(f"/api/admin/events/{event_id}/freeze", headers=auth(admin),
                 json={"frozen": False})
     lb = client.get(f"/api/events/{event_id}/leaderboard", headers=auth(u1)).json()
-    assert len(lb["entries"]) == 2
+    assert [e["total"] for e in lb["entries"]] == [100, 100]
+    assert lb["entries"][0]["display_name"] == "Early"  # earlier solve wins tie
 
 
 def test_leaderboard_visibility_toggle(client):
@@ -314,7 +307,120 @@ def test_event_detail_challenges_for_player_and_admin(client):
     d = client.get(f"/api/events/{event_id}", headers=auth(user)).json()
     assert [(c["challenge_id"], c["points"]) for c in d["challenges"]] == [
         ("l1", 100), ("l2", 200)]
-    assert all(c["available"] for c in d["challenges"])
+    # progression: level 1 open, level 2 locked until level 1 is solved
+    by_id = {c["challenge_id"]: c for c in d["challenges"]}
+    assert by_id["l1"]["available"] and not by_id["l1"]["locked"]
+    assert by_id["l2"]["locked"] and not by_id["l2"]["available"]
+    assert by_id["l1"]["subtitle"] == "Think you speak trade, do ya?"
     # admin, not enrolled: full challenge list for management
     d = client.get(f"/api/events/{event_id}", headers=auth(admin)).json()
     assert len(d["challenges"]) == 2
+
+
+def test_sequential_unlock_enforced_server_side(client):
+    admin = register(client, admin=True)
+    user = register(client)
+    event_id = make_event(client, admin, challenges=("l1", "l2", "l3"),
+                          points=(100, 200, 300))
+    _enroll(client, user, event_id)
+
+    # cannot open level 2 before solving level 1 (direct API, no UI involved)
+    r = client.post("/api/game/sessions", headers=auth(user), json={
+        "challenge_id": "l2", "mode": "ranked", "event_id": event_id})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "level_locked"
+
+    # solve level 1 -> level 2 unlocks, level 3 still locked
+    s1 = start_session(client, user, "l1", "ranked", event_id)
+    assert send(client, user, s1["game_session_id"], "go").json()["leaked"]
+    assert client.post("/api/game/sessions", headers=auth(user), json={
+        "challenge_id": "l2", "mode": "ranked", "event_id": event_id}
+        ).status_code == 200
+    assert client.post("/api/game/sessions", headers=auth(user), json={
+        "challenge_id": "l3", "mode": "ranked", "event_id": event_id}
+        ).json()["error"]["code"] == "level_locked"
+
+    # event detail reflects the lock state
+    d = client.get(f"/api/events/{event_id}", headers=auth(user)).json()
+    by = {c["challenge_id"]: c for c in d["challenges"]}
+    assert not by["l1"]["locked"] and not by["l2"]["locked"] and by["l3"]["locked"]
+
+    # solve level 2 -> level 3 unlocks
+    s2 = start_session(client, user, "l2", "ranked", event_id)
+    assert send(client, user, s2["game_session_id"], "go").json()["leaked"]
+    assert client.post("/api/game/sessions", headers=auth(user), json={
+        "challenge_id": "l3", "mode": "ranked", "event_id": event_id}
+        ).status_code == 200
+
+
+def test_reset_does_not_relock_progress(client):
+    admin = register(client, admin=True)
+    user = register(client)
+    event_id = make_event(client, admin, challenges=("l1", "l2"),
+                          points=(100, 200))
+    _enroll(client, user, event_id)
+    s1 = start_session(client, user, "l1", "ranked", event_id)
+    assert send(client, user, s1["game_session_id"], "go").json()["leaked"]
+    # resetting level 1 keeps the solve, so level 2 stays unlocked
+    client.post(f"/api/game/sessions/{s1['game_session_id']}/reset",
+                headers=auth(user))
+    assert client.post("/api/game/sessions", headers=auth(user), json={
+        "challenge_id": "l2", "mode": "ranked", "event_id": event_id}
+        ).status_code == 200
+
+
+def test_leaderboard_lists_every_enrolled_player(client):
+    admin = register(client, admin=True)
+    event_id = make_event(client, admin, challenges=("l1",), points=(100,))
+    solver = register(client, name="Solver")
+    attempter = register(client, name="Attempter")
+    never = register(client, name="Never")
+    for u in (solver, attempter, never):
+        _enroll(client, u, event_id)
+
+    s = start_session(client, solver, "l1", "ranked", event_id)
+    assert send(client, solver, s["game_session_id"], "go").json()["leaked"]
+
+    providers.set_mock_responder(refusing_responder)
+    sa = start_session(client, attempter, "l1", "ranked", event_id)
+    send(client, attempter, sa["game_session_id"], "please")  # attempt, no solve
+
+    lb = client.get(f"/api/events/{event_id}/leaderboard",
+                    headers=auth(admin)).json()
+    names = [e["display_name"] for e in lb["entries"]]
+    assert set(names) == {"Solver", "Attempter", "Never"}
+    assert names[0] == "Solver"                      # only solver has points
+    by = {e["display_name"]: e for e in lb["entries"]}
+    assert by["Solver"]["total"] == 100 and by["Solver"]["solved"] == 1
+    assert by["Attempter"]["total"] == 0 and by["Attempter"]["last_solve"] is None
+    assert by["Never"]["total"] == 0 and by["Never"]["last_solve"] is None
+    # zero-point players are ordered stably by name
+    assert names[1:] == ["Attempter", "Never"]
+
+
+def test_maintenance_update_publishes_and_repins(client):
+    import asyncio
+    from app import maintenance
+    admin = register(client, admin=True)
+
+    async def run():
+        import asyncpg
+        conn = await asyncpg.connect(TEST_DSN)
+        try:
+            # simulate an older published version differing from the code config
+            await conn.execute(
+                """UPDATE challenge_versions SET config = jsonb_set(config,
+                   '{title}', '\"OLD TITLE\"') WHERE challenge_id='l1' AND version=1""")
+            pub = await maintenance.publish_updates(conn)
+            latest = await maintenance._latest_versions(conn)
+            ev = await maintenance.ensure_dev_event(conn, "volt-dev-test")
+            changed = await maintenance.repin_event(conn, ev, latest)
+            return pub, changed, ev
+        finally:
+            await conn.close()
+    pub, changed, ev = asyncio.new_event_loop().run_until_complete(run())
+    assert ("l1", 2) in pub            # l1 republished as v2
+    assert "l1" in changed             # dev event repinned to it
+    # the dev event now serves the new (code) title, not OLD TITLE
+    d = client.get(f"/api/events/{ev}", headers=auth(admin)).json()
+    by = {c["challenge_id"]: c for c in d["challenges"]}
+    assert by["l1"]["title"] == "Substation Slang Spike"

@@ -60,8 +60,8 @@ export default function Leaderboard() {
       {err && <div className="notice warn">{err}</div>}
       {frozenAt && (
         <div className="notice warn">
-          Leaderboard frozen at {new Date(frozenAt).toLocaleString()} — play
-          continues, standings will be revealed at the end.
+          Leaderboard frozen at {new Date(frozenAt).toLocaleString()}. Play
+          continues; standings will be revealed at the end.
         </div>
       )}
       {active !== null && (
@@ -71,7 +71,7 @@ export default function Leaderboard() {
       )}
       <table className="plain">
         <thead>
-          <tr><th>#</th><th>Player</th><th>Points</th><th>Solved</th>
+          <tr><th>#</th><th>Player</th><th>Points</th><th>Levels solved</th>
             <th>Last solve</th></tr>
         </thead>
         <tbody>
@@ -81,12 +81,14 @@ export default function Leaderboard() {
               <td>{e.display_name}{e.me ? ' (you)' : ''}</td>
               <td>{e.total}</td>
               <td>{e.solved}</td>
-              <td>{new Date(e.last_solve).toLocaleTimeString()}</td>
+              <td>{e.last_solve
+                ? new Date(e.last_solve).toLocaleTimeString()
+                : 'Not yet'}</td>
             </tr>
           ))}
           {entries.length === 0 && !err && (
             <tr><td colSpan={5} style={{ color: 'var(--text-dim)' }}>
-              No ranked solves yet.</td></tr>
+              No players enrolled yet.</td></tr>
           )}
         </tbody>
       </table>

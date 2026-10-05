@@ -103,8 +103,38 @@ async def resolve_access(
     if isinstance(cfg, str):
         import json
         cfg = json.loads(cfg)
+    # Sequential unlocking (ranked only): level N requires level N-1 solved.
+    # Enforced here so it covers every ranked path (start, message, reset,
+    # hints, submit, session fetch), not just the UI.
+    if _level_number(challenge_id) > await unlocked_through(conn, user_id, str(event_id)):
+        raise ApiError("this level is locked; solve the previous level first",
+                       403, code="level_locked")
     return ChallengeAccess(challenge_id, str(event_id), str(event_id), "ranked",
                            row["version"], cfg, row["points"])
+
+
+def _level_number(challenge_id: str) -> int:
+    try:
+        return int(challenge_id[1:])
+    except (ValueError, IndexError):
+        return 999
+
+
+async def unlocked_through(conn: asyncpg.Connection, user_id: str, scope: str) -> int:
+    """Highest level number the player may access in this scope: 1, plus the
+    length of the solved prefix starting at level 1. Level 1 is always open;
+    solving level N opens level N+1. Based on the authoritative solves table,
+    so it persists across refresh, logout/login and restart, and a reset
+    (which never deletes solves) cannot relock a level."""
+    rows = await conn.fetch(
+        "SELECT challenge_id FROM solves WHERE user_id=$1 AND scope=$2",
+        user_id, scope,
+    )
+    solved = {r["challenge_id"] for r in rows}
+    n = 1
+    while f"l{n}" in solved:
+        n += 1
+    return n
 
 
 # --------------------------------------------------------------------------

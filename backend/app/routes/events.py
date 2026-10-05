@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .. import db
+from .. import db, game
 from ..audit import record
 from ..config import settings
 from ..errors import ApiError
@@ -127,6 +127,7 @@ async def event_detail(request: Request) -> JSONResponse:
             ev["id"], user.id, str(ev["id"]),
         )
         now = datetime.now(timezone.utc)
+        unlocked = await game.unlocked_through(conn, user.id, str(ev["id"]))
         challenges = []
         for r in rows:
             cfg = r["config"]
@@ -137,14 +138,16 @@ async def event_detail(request: Request) -> JSONResponse:
                         and (not r["opens_at"] or now >= r["opens_at"])
                         and (not r["closes_at"] or now < r["closes_at"])
                         and ev["starts_at"] <= now < ev["ends_at"])
+            locked = r["number"] > unlocked
             challenges.append({
                 "challenge_id": r["challenge_id"], "number": r["number"],
-                "title": cfg.get("title"), "codename": cfg.get("codename"),
-                "technique": cfg.get("technique"), "briefing": cfg.get("briefing"),
-                "lesson": cfg.get("lesson"), "points": r["points"],
-                "version": r["version"], "available": open_now,
+                "title": cfg.get("title"), "subtitle": cfg.get("subtitle", ""),
+                "points": r["points"],
+                "version": r["version"],
+                "open_now": open_now,
+                "locked": locked,
+                "available": open_now and not locked,
                 "starter": cfg.get("starter"),
-                "hint_costs": [h.get("cost", 0) for h in cfg.get("hints", [])],
                 "solved": r["solved_at"] is not None,
                 "solved_at": r["solved_at"].isoformat() if r["solved_at"] else None,
                 "net_points": (max(0, r["solve_points"] - r["hints_cost"])
@@ -200,21 +203,38 @@ async def leaderboard(request: Request) -> JSONResponse:
             raise ApiError("the leaderboard is hidden right now", 403,
                            code="leaderboard_hidden")
         cutoff = ev["leaderboard_frozen_at"]
+        # Start from enrolments and LEFT JOIN the solve aggregate, so every
+        # enrolled player appears, including those with zero solves. Ranking:
+        # points desc, then earliest last-solve (a real time sorts before the
+        # "no solves" sentinel), then display name for a stable order among
+        # players on zero points.
         rows = await conn.fetch(
-            """SELECT u.display_name, s.user_id,
-                      sum(greatest(0, s.points - s.hints_cost)) AS total,
-                      count(*) AS solved, max(s.solved_at) AS last_solve
-               FROM solves s JOIN users u ON u.id = s.user_id
-               WHERE s.event_id=$1 AND s.mode='ranked'
-                 AND ($2::timestamptz IS NULL OR s.solved_at <= $2)
-               GROUP BY s.user_id, u.display_name
-               ORDER BY total DESC, last_solve ASC""",
+            """SELECT u.id AS user_id, u.display_name,
+                      coalesce(agg.total, 0) AS total,
+                      coalesce(agg.solved, 0) AS solved,
+                      agg.last_solve
+               FROM enrollments en
+               JOIN users u ON u.id = en.user_id
+               LEFT JOIN (
+                   SELECT s.user_id,
+                          sum(greatest(0, s.points - s.hints_cost)) AS total,
+                          count(*) AS solved,
+                          max(s.solved_at) AS last_solve
+                   FROM solves s
+                   WHERE s.event_id=$1 AND s.mode='ranked'
+                     AND ($2::timestamptz IS NULL OR s.solved_at <= $2)
+                   GROUP BY s.user_id
+               ) agg ON agg.user_id = u.id
+               WHERE en.event_id=$1
+               ORDER BY total DESC,
+                        last_solve ASC NULLS LAST,
+                        lower(u.display_name) ASC, u.id ASC""",
             ev["id"], cutoff,
         )
         entries = [
             {"rank": i + 1, "display_name": r["display_name"],
              "total": int(r["total"]), "solved": int(r["solved"]),
-             "last_solve": r["last_solve"].isoformat(),
+             "last_solve": r["last_solve"].isoformat() if r["last_solve"] else None,
              "me": str(r["user_id"]) == user.id}
             for i, r in enumerate(rows)
         ]
