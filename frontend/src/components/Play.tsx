@@ -301,6 +301,7 @@ export default function Play() {
                 aria-disabled={c.locked}
                 onClick={() => openLevel(c)}>
                 <div className="num">
+                  <ZapBolt size={11} />
                   Level {c.number}{c.locked ? ' (locked)' : ''}
                 </div>
                 <div className="name">{c.title}</div>
@@ -340,19 +341,22 @@ export default function Play() {
             <img className="mascot" src={voltMascot} alt="VOLT, the mascot" />
             <h2>Talk to VOLT.</h2>
             <p>
-              VOLT is an AI assistant guarding a secret flag on every level.
-              Each level defends the flag differently. Pick a level on the left
-              to begin. Level 1 is open; clearing a level unlocks the next.
+              VOLT guards a secret flag on every level. Each level defends the
+              flag differently. Pick a level on the left to begin. Level 1 is
+              open and clearing a level unlocks the next.
             </p>
             <p>
-              Scoring rewards efficiency: fewer attempts and fewer model
-              tokens mean a bigger bonus, and harder levels are worth more.
+              Scoring rewards efficiency and learning: fewer attempts and
+              fewer tokens spent mean a bigger bonus! Achieve higher in your
+              cyber-savvy level reviews in the Postmortems after solves.
+              Harder levels are worth more!
             </p>
           </div>
         ) : (
           <>
             <div className="briefing">
               <h2>
+                <ZapBolt size={17} />
                 Level {current?.number}. {session.challenge.title}
                 {session.solved && <span className="badge solved">solved</span>}
               </h2>
@@ -923,6 +927,19 @@ function McpTrace_({ mcp }: { mcp: McpTrace }) {
         </div>
       )}
     </>
+  )
+}
+
+// VOLT's lightning bolt, drawn inline (the UI ships no emoji). It idles
+// visible and flickers for a moment every few seconds; purely decorative,
+// hidden from screen readers, and static under prefers-reduced-motion.
+function ZapBolt({ size = 16 }: { size?: number }) {
+  return (
+    <svg className="zap" viewBox="0 0 20 20" width={size} height={size}
+      aria-hidden="true" focusable="false">
+      <path d="M11.4 1.6 4.4 11.2h4.1L7 18.4l7.1-9.8h-4.2l1.5-7Z"
+        fill="currentColor" />
+    </svg>
   )
 }
 

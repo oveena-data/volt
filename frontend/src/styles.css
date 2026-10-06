@@ -30,6 +30,7 @@
   --volt-strong: #1d4ed8;
   --volt-soft: #e9effd;
   --volt-border: #b9cdf7;
+  --bolt: #e09b00;          /* the mascot's lightning gold */
   --radius: 10px;
 }
 
@@ -59,6 +60,7 @@
   --volt-strong: #9dbdff;
   --volt-soft: #1a2439;
   --volt-border: #30487c;
+  --bolt: #f2c14e;
   --radius: 10px;
 }
 
@@ -211,8 +213,33 @@ label.field > span {
   padding: 32px 22px; }
 .briefing.empty h2 { color: var(--text); font-size: 20px; margin: 0 0 4px; }
 .briefing.empty .mascot {
-  display: block; width: min(220px, 48vw); height: auto;
-  margin: 0 auto 18px;
+  display: block; width: min(150px, 40vw); height: auto;
+  margin: 0 auto 16px;
+}
+
+/* VOLT's zap: a drawn bolt that idles steady and flickers now and then.
+   Items in the level list flicker on staggered delays so the column never
+   lights up all at once. */
+.zap {
+  color: var(--bolt); vertical-align: -2px; margin-right: 5px;
+  animation: zap-flicker 7s linear infinite;
+}
+.briefing h2 .zap { margin-right: 7px; }
+.level-item .num .zap { margin-right: 4px; vertical-align: -1px; }
+.level-item:nth-child(3n) .zap { animation-delay: 2.3s; }
+.level-item:nth-child(3n + 1) .zap { animation-delay: 4.1s; }
+.level-item:nth-child(4n + 2) .zap { animation-duration: 9s; }
+.level-item.locked .zap { color: var(--text-faint); animation: none; }
+@keyframes zap-flicker {
+  0%, 86%, 100% { opacity: 1; filter: none; }
+  88% { opacity: 0.25; }
+  90% { opacity: 1; filter: drop-shadow(0 0 4px var(--bolt)); }
+  93% { opacity: 0.45; }
+  95%, 97% { opacity: 1; filter: drop-shadow(0 0 6px var(--bolt)); }
+  98% { opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zap { animation: none; }
 }
 .badge {
   display: inline-block; font-size: 12px; border-radius: 999px;

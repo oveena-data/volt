@@ -142,9 +142,10 @@ function WelcomeSplash({ name, onDone }: { name: string; onDone: () => void }) {
       </div>
       <div className="welcome-card" onClick={e => e.stopPropagation()}>
         <h2>Welcome, {name}!</h2>
-        <p>VOLT has ten flags and precisely zero intention of handing them over.
-          Good luck.</p>
-        <button className="btn primary" onClick={onDone}>Let's play</button>
+        <p>You just plugged yourself into the AI Prompt Injection CTF
+          Challenge. VOLT has been told not to talk to strangers, and you
+          look delightfully suspicious. Go make it awkward.</p>
+        <button className="btn primary" onClick={onDone}>Let the sparks fly</button>
       </div>
     </div>
   )
