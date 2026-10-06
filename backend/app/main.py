@@ -139,7 +139,7 @@ middleware = [
     Middleware(
         CORSMiddleware,
         allow_origins=settings.cors_list,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
         max_age=600,
     ),

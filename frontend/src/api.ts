@@ -54,6 +54,7 @@ async function req(method: string, path: string, body?: unknown): Promise<any> {
 export const api = {
   get: (p: string) => req('GET', p),
   post: (p: string, b?: unknown) => req('POST', p, b ?? {}),
+  put: (p: string, b: unknown) => req('PUT', p, b),
   patch: (p: string, b: unknown) => req('PATCH', p, b),
   del: (p: string) => req('DELETE', p),
   getText: async (p: string): Promise<string> => {
@@ -118,6 +119,40 @@ export interface Hint {
   text: string
 }
 
+// ---- MCP tool servers (Level 9) ----
+// `summary` is what a person approving a server is shown; `model_sees` is the
+// full description the model is handed. The gap between them is the level.
+export interface McpTool {
+  name: string
+  summary: string
+  model_sees: string
+  schema: Record<string, string>
+  trusted: boolean
+}
+
+export interface McpServer {
+  server: string
+  trusted: boolean
+  tools: McpTool[]
+}
+
+export interface McpView {
+  connected: McpServer[]
+  installed: McpServer | null
+  limits: {
+    max_tools: number
+    max_description_chars: number
+    max_manifest_chars: number
+    max_steps: number
+  }
+  template: unknown
+}
+
+export interface Attachment {
+  name: string
+  text: string
+}
+
 export interface SessionState {
   game_session_id: string
   challenge_id: string
@@ -129,6 +164,8 @@ export interface SessionState {
     points: number; version: number; hint_costs?: number[]
   }
   hints?: Hint[]
+  // present only on levels that expose a tool catalogue
+  mcp?: McpView
   messages: Message[]
   tokens: number
   attempts: number

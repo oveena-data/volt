@@ -112,3 +112,16 @@ def test_cross_player_session_isolation(client):
                       headers=auth(alice)).status_code == 404
     assert client.get("/api/game/sessions/not-a-uuid",
                       headers=auth(alice)).status_code == 404
+
+
+def test_cors_preflight_allows_every_method_the_api_serves(client):
+    """A method the router serves but CORS omits is invisible to the test
+    client (which bypasses preflight) and fails only in a real browser."""
+    from starlette.routing import Route
+
+    from app.main import app, middleware
+    served = {m for r in app.routes if isinstance(r, Route)
+              for m in (r.methods or set())} - {"HEAD"}
+    cors = next(mw for mw in middleware if "CORS" in mw.cls.__name__)
+    allowed = set(cors.kwargs["allow_methods"])
+    assert served <= allowed, f"CORS blocks served methods: {served - allowed}"

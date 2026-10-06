@@ -35,12 +35,36 @@ All request bodies are JSON, validated server-side.
 |---|---|---|---|
 | POST | /game/sessions | challenge_id, mode (`practice`\|`ranked`), event_id? | creates/returns the session + full state (transcript, meters, hints, solve) |
 | GET | /game/sessions/{gsid} | — | full state (owner only; others 404) |
-| POST | /game/sessions/{gsid}/message | client_msg_id, text | one turn. Statuses: `done`, `blocked` (filter), 502 `error` (provider — not an attempt, retry same client_msg_id), 409 `busy`/`in_progress`/`turn_limit`, 429 `rate_limited`/`queue_full`, 423 `event_paused` |
-| POST | /game/sessions/{gsid}/reset | — | destroys conversation + accumulated level state; solves/hints kept |
-| POST | /game/sessions/{gsid}/new-chat | — | clears conversation (levels 6+: will keep persistent memory) |
+| POST | /game/sessions/{gsid}/message | client_msg_id, text, attachment? | one turn. Statuses: `done`, `blocked` (filter), 502 `error` (provider — not an attempt, retry same client_msg_id), 409 `busy`/`in_progress`/`turn_limit`, 429 `rate_limited`/`queue_full`, 423 `event_paused` |
+| POST | /game/sessions/{gsid}/reset | — | destroys conversation + accumulated level state; also wipes L8 memory and uninstalls an L9 MCP server; solves/hints kept |
+| POST | /game/sessions/{gsid}/new-chat | — | clears the conversation but keeps out-of-conversation level state (L8 persistent memory, an L9 installed server) |
+| PUT | /game/sessions/{gsid}/tools | manifest (object, or null to uninstall) | installs/replaces the player's MCP server on a tool-loop level. 422 `invalid_manifest` with the reason; 400 `unsupported` on levels with no tool catalogue. Returns the same `mcp` view the session state carries |
 | POST | /game/sessions/{gsid}/hints | hint_index | in-order unlock; cost deducted only in ranked |
 | POST | /game/sessions/{gsid}/submit | flag | validates against the caller's own flag (transform-aware) |
 | GET | /me/progress | — | own solves across scopes |
+
+### Attachments (tool-loop levels)
+
+`attachment` on a turn is `{"name": "<something>.txt", "text": "..."}`: text
+only, `.txt` only, bounded by `MAX_ATTACHMENT_CHARS` (default 8000). It is
+stored on the message that carried it and mounted on the level's simulated
+filesystem; it is **never** interpolated into a prompt, so a model can reach
+its content only by calling a file-reading tool. Levels without file tools
+never see it.
+
+### The `mcp` session field
+
+Present only on levels whose config sets `pipeline: "mcp_agent"`. Carries
+`connected` (trusted servers), `installed` (the player's server or null),
+`limits` and `template`. Every tool is reported twice: `summary` is what a
+person approving the server is shown (the description's first line, truncated),
+`model_sees` is the full description the model is handed. Clients render both;
+the difference is the vulnerability the level teaches.
+
+A turn's `extras.mcp` carries `steps` (the loop as it ran, with arguments and
+results already redacted — it is the organisation's audit view), `inbound`
+(calls that reached the player's own server, arguments verbatim), `dlp_blocked`
+and `files_visible`.
 
 Idempotency: resending the same `client_msg_id` replays a finished turn's
 stored result, returns 409 `in_progress` while it runs, and re-executes

@@ -16,7 +16,7 @@ player text
   → input filters (deterministic, per level — part of the challenge)
   → model / pipeline (system prompt with the player's flag + history;
                       6-10 chain validator/target, exec/compliance,
-                      memory, approval or the four-agent grid)
+                      memory, the MCP tool loop or the four-agent grid)
   → output redaction where the level has it (L7 compliance; L10 publisher)
   → leaked = transform-aware flag detection on the PLAYER-VISIBLE text
              (operator statistic only; the solve comes from submission)
@@ -159,8 +159,18 @@ free: it is sold as a paid hint.
 | 6 | Professional Frenemy | validator model classifies SAFE/UNSAFE; SAFE forwards verbatim to a target model holding the flag | the two models read the same message differently: a wrapper (translation/quote/comment) reads benign to the deliberately lenient validator but still executes on the target |
 | 7 | Above my paygrade, unfortunately | execution model (holds flag) then a compliance model that redacts recognisable secret formats | compliance pattern-matches; an encoded flag (hex/base64/reversed) reads as prose and passes, and the transform-aware detector still reconstructs it |
 | 8 | Remember Me | stateful memory: a preference stored in one session loads into later sessions as trusted context | memory written by the current conversation is inert; a later session loads the poisoned preference and a benign trigger fires it. Reset wipes memory; New chat keeps it |
-| 9 | Oh my Human | agent proposes an action; a reviewer decision engine approves from a dashboard rendered in a sandboxed iframe | the dashboard shows the destination as typed (Markdown-link text, confusable homoglyphs), so a destination can display internal while routing externally |
+| 9 | Oh my Human | agent loop (up to `max_tool_steps` calls/turn) over MCP tool servers: trusted `filesystem` + `mailer`, plus a server the player installs and whose manifest they author | a tool description reaches the model verbatim as catalogue metadata while a human approving the server sees only the name and the description's first line; chat is DLP-monitored and the mailer refuses external recipients, but a player-installed tool's ARGUMENTS are unmonitored |
 | 10 | Ghost in the Grid | four agents (Scout, Analyst, Commander, Publisher), separate calls/contexts/permissions; only Commander holds the flag | provenance is typed metadata, but the Analyst's combined recommendation is stamped OFFICIAL, which Commander acts on; content grows more trusted as it moves between agents |
+
+Level 9's flag is the one that lives in no prompt at all: it is interpolated
+into a file in `config["files"]`, reachable only via `filesystem.read_file`,
+so the agent must genuinely chain read then act. `challenge_tools` stores the
+player's manifest scoped to (user, scope, challenge); new chat keeps an
+installed server, reset uninstalls it. Attachments live on the `messages` row
+that carried them and are mounted on the level's filesystem, never
+interpolated into a prompt. Manifest SHAPE is validated
+(`pipeline.validate_manifest`); manifest CONTENT deliberately is not, since a
+poisoned description is the intended exploit.
 
 Memory items (Level 8) carry `source_conversation_id`; an item is active only
 in conversations other than the one that wrote it (delayed activation), and

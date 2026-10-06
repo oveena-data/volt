@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  api, ApiError, Challenge, EventInfo, Hint, Message, newMsgId, SessionState,
+  api, ApiError, Attachment, Challenge, EventInfo, Hint, McpTool, McpView,
+  Message, newMsgId, SessionState,
 } from '../api'
 
 interface PendingTurn {
@@ -9,6 +10,7 @@ interface PendingTurn {
   state: 'sending' | 'failed'
   error?: string
   retryable?: boolean
+  attachment?: Attachment | null
 }
 
 export default function Play() {
@@ -21,6 +23,7 @@ export default function Play() {
   const [notice, setNotice] = useState('')
   const [extras, setExtras] = useState<any>(null)
   const [draft, setDraft] = useState('')
+  const [attachment, setAttachment] = useState<Attachment | null>(null)
   const [flagGuess, setFlagGuess] = useState('')
   const [clockOffset, setClockOffset] = useState(0)
   const chatRef = useRef<HTMLDivElement>(null)
@@ -72,6 +75,7 @@ export default function Play() {
     setNotice('')
     setPending(null)
     setExtras(null)
+    setAttachment(null)
     try {
       setSession(await api.post('/api/game/sessions', {
         challenge_id: c.challenge_id, mode: 'ranked', event_id: event.id,
@@ -88,14 +92,15 @@ export default function Play() {
     } catch { /* keep current view */ }
   }
 
-  const sendTurn = async (text: string, msgId: string) => {
+  const sendTurn = async (text: string, msgId: string, att?: Attachment | null) => {
     if (!session) return
-    setPending({ msgId, text, state: 'sending' })
+    setPending({ msgId, text, state: 'sending', attachment: att ?? null })
     setNotice('')
     try {
       const r = await api.post(
         `/api/game/sessions/${session.game_session_id}/message`,
-        { client_msg_id: msgId, text })
+        att ? { client_msg_id: msgId, text, attachment: att }
+            : { client_msg_id: msgId, text })
       setPending(null)
       setExtras(r.extras || null)
       setSession(s => {
@@ -117,12 +122,14 @@ export default function Play() {
       if (e instanceof ApiError) {
         if (e.status === 502) {
           setPending({ msgId, text, state: 'failed', retryable: true,
+            attachment: att ?? null,
             error: 'Model backend unavailable. This did not count as an attempt.' })
         } else if (e.code === 'rate_limited' || e.code === 'queue_full') {
           setPending({ msgId, text, state: 'failed', retryable: true,
-            error: e.message })
+            attachment: att ?? null, error: e.message })
         } else if (e.code === 'in_progress' || e.code === 'busy') {
           setPending({ msgId, text, state: 'failed', retryable: true,
+            attachment: att ?? null,
             error: 'A turn is already being processed. Retry in a moment.' })
         } else {
           setPending(null)
@@ -131,6 +138,7 @@ export default function Play() {
         }
       } else {
         setPending({ msgId, text, state: 'failed', retryable: true,
+          attachment: att ?? null,
           error: 'Network error. Retry. Duplicates are handled safely.' })
       }
     }
@@ -140,8 +148,10 @@ export default function Play() {
     e.preventDefault()
     const text = draft.trim()
     if (!text || pending?.state === 'sending' || !session) return
+    const att = attachment
     setDraft('')
-    sendTurn(text, newMsgId())
+    setAttachment(null)
+    sendTurn(text, newMsgId(), att)
   }
 
   const rotate = async (kind: 'reset' | 'new-chat') => {
@@ -153,6 +163,7 @@ export default function Play() {
     try {
       setPending(null)
       setExtras(null)
+      setAttachment(null)
       setSession(await api.post(
         `/api/game/sessions/${session.game_session_id}/${kind}`))
     } catch (e) {
@@ -359,6 +370,12 @@ export default function Play() {
 
             <HintPanel session={session} onUnlock={unlockHint} />
 
+            {session.mcp && (
+              <ServersPanel mcp={session.mcp}
+                gsid={session.game_session_id}
+                onChange={refreshSession} />
+            )}
+
             <div className="chat" ref={chatRef} aria-live="polite">
               {session.messages.map((m, i) => <MessageView key={i} m={m} />)}
               {pending?.state === 'sending' && (
@@ -374,7 +391,8 @@ export default function Play() {
                   <span>{pending.error}</span>
                   {pending.retryable && (
                     <button className="btn small"
-                      onClick={() => sendTurn(pending.text, pending.msgId)}>Retry</button>
+                      onClick={() => sendTurn(pending.text, pending.msgId,
+                                              pending.attachment)}>Retry</button>
                   )}
                   <button className="btn small"
                     onClick={() => setPending(null)}>Dismiss</button>
@@ -416,6 +434,10 @@ export default function Play() {
                     Insert sample material
                   </button>
                 )}
+                {session.mcp && (
+                  <AttachButton attachment={attachment} onPick={setAttachment}
+                    onError={setNotice} />
+                )}
                 <button className="btn small" onClick={() => rotate('new-chat')}>
                   New chat
                 </button>
@@ -433,6 +455,192 @@ export default function Play() {
           </>
         )}
       </main>
+    </div>
+  )
+}
+
+const MAX_ATTACH_CHARS = 8000
+
+// A plain .txt picker, styled as one more small button in the composer meta
+// row next to "New chat". Nothing about the attachment enters a prompt: the
+// backend mounts it on the level's filesystem server, so VOLT can only reach
+// it by calling a file-reading tool.
+function AttachButton({ attachment, onPick, onError }: {
+  attachment: Attachment | null
+  onPick: (a: Attachment | null) => void
+  onError: (m: string) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+
+  const choose = async (file: File | undefined) => {
+    if (!file) return
+    if (!/\.txt$/i.test(file.name)) {
+      onError('Attachments must be .txt files.')
+      return
+    }
+    const text = await file.text()
+    if (text.length > MAX_ATTACH_CHARS) {
+      onError(`That file is ${text.length.toLocaleString()} characters; the `
+        + `limit is ${MAX_ATTACH_CHARS.toLocaleString()}.`)
+      return
+    }
+    if (!text.length) {
+      onError('That file is empty.')
+      return
+    }
+    onError('')
+    onPick({ name: file.name, text })
+  }
+
+  return (
+    <>
+      <input ref={ref} type="file" accept=".txt,text/plain"
+        style={{ display: 'none' }} aria-hidden="true"
+        onChange={e => {
+          choose(e.target.files?.[0])
+          e.target.value = ''   // let the same file be picked again
+        }} />
+      {attachment ? (
+        <span className="chip" title={`${attachment.text.length} characters`}>
+          {attachment.name}
+          <button className="chip-x" aria-label="Remove attachment"
+            onClick={() => onPick(null)}>&times;</button>
+        </span>
+      ) : (
+        <button className="btn small" onClick={() => ref.current?.click()}>
+          Attach .txt
+        </button>
+      )}
+    </>
+  )
+}
+
+// The MCP servers panel. Collapsed by default and opened by a small button,
+// exactly like the hints panel, so levels that have no tool catalogue look
+// and behave as they always did.
+function ServersPanel({ mcp, gsid, onChange }: {
+  mcp: McpView; gsid: string; onChange: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const toolCount = mcp.connected.reduce((n, s) => n + s.tools.length, 0)
+    + (mcp.installed?.tools.length || 0)
+
+  const editorText = draft || JSON.stringify(
+    mcp.installed
+      ? { server: mcp.installed.server,
+          tools: mcp.installed.tools.map(t => ({
+            name: t.name, description: t.model_sees, inputSchema: t.schema })) }
+      : mcp.template,
+    null, 2)
+
+  const save = async (manifest: unknown) => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.put(`/api/game/sessions/${gsid}/tools`, { manifest })
+      setDraft('')
+      onChange()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not update the server.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const install = () => {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(editorText)
+    } catch {
+      setErr('That is not valid JSON.')
+      return
+    }
+    save(parsed)
+  }
+
+  return (
+    <div className="hintpanel">
+      <button className="btn small" aria-expanded={open}
+        onClick={() => setOpen(o => !o)}>
+        {open ? 'Hide MCP servers' : `MCP servers (${toolCount} tools)`}
+        {mcp.installed ? ' +1 installed' : ''}
+      </button>
+      {open && (
+        <div className="hints">
+          <p className="dim" style={{ margin: '0 0 8px' }}>
+            VOLT calls these tools in a loop, up to {mcp.limits.max_steps} per
+            message. For each tool you see the summary a person approving the
+            server reads; expand a tool to see the description VOLT is actually
+            handed.
+          </p>
+
+          {mcp.connected.map(srv => (
+            <div key={srv.server} className="hint-row">
+              <b>{srv.server}</b> <span className="dim">connected</span>
+              {srv.tools.map(t => <ToolRow key={t.name} tool={t} />)}
+            </div>
+          ))}
+
+          <div className="hint-row">
+            <b>{mcp.installed ? mcp.installed.server : 'your server'}</b>{' '}
+            <span className="dim">
+              {mcp.installed ? 'installed by you' : 'not installed'}
+            </span>
+            {mcp.installed?.tools.map(t => <ToolRow key={t.name} tool={t} />)}
+
+            <textarea className="input mono" value={editorText} rows={10}
+              aria-label="MCP server manifest"
+              style={{ width: '100%', marginTop: 8 }}
+              onChange={e => setDraft(e.target.value)} />
+            <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
+              up to {mcp.limits.max_tools} tools,{' '}
+              {mcp.limits.max_description_chars.toLocaleString()} characters per
+              description
+            </div>
+            {err && <div className="notice err" style={{ marginTop: 6 }}>{err}</div>}
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              <button className="btn primary small" disabled={busy}
+                onClick={install}>
+                {mcp.installed ? 'Update server' : 'Install server'}
+              </button>
+              {mcp.installed && (
+                <button className="btn small danger" disabled={busy}
+                  onClick={() => save(null)}>Uninstall</button>
+              )}
+              {draft && (
+                <button className="btn small" onClick={() => setDraft('')}>
+                  Revert edits
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// One tool as a consent screen shows it: name, parameters and a one-line
+// summary, with the full text the model receives behind a disclosure.
+function ToolRow({ tool }: { tool: McpTool }) {
+  const [show, setShow] = useState(false)
+  const params = Object.keys(tool.schema || {})
+  return (
+    <div className="toolrow">
+      <code>{tool.name}</code>
+      {params.length > 0 && (
+        <span className="dim"> ({params.join(', ')})</span>
+      )}
+      <div className="dim">{tool.summary || 'no description'}</div>
+      <button className="btn small" aria-expanded={show}
+        onClick={() => setShow(v => !v)}>
+        {show ? 'Hide what VOLT sees' : 'Show what VOLT sees'}
+      </button>
+      {show && <pre className="toolsees">{tool.model_sees || '(empty)'}</pre>}
     </div>
   )
 }
@@ -492,10 +700,10 @@ function HintPanel({ session, onUnlock }:
 function PipelineTrace({ extras }: { extras: any }) {
   const stages = extras.pipeline as { stage: string; verdict?: string; status?: string }[] | undefined
   const agents = extras.agents as any[] | undefined
-  const approval = extras.approval
+  const mcp = extras.mcp as McpTrace | undefined
   const memoryLoaded = extras.memory_loaded as number | undefined
 
-  if (!stages && !agents && approval === undefined && memoryLoaded === undefined) return null
+  if (!stages && !agents && !mcp && memoryLoaded === undefined) return null
 
   return (
     <div className="trace">
@@ -529,55 +737,77 @@ function PipelineTrace({ extras }: { extras: any }) {
         </div>
       )}
 
-      {approval && <ApprovalDashboard approval={approval} />}
+      {mcp && <McpTrace_ mcp={mcp} />}
     </div>
   )
 }
 
-function esc(s: string): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+interface McpStep {
+  tool: string
+  server: string
+  ok: boolean
+  trusted: boolean
+  arguments_preview: Record<string, string>
+  result: string
 }
 
-// The approval screen renders untrusted fields exactly as a naive dashboard
-// would. It lives in a sandboxed, separate-origin iframe (srcdoc gives an
-// opaque origin; the empty sandbox attribute blocks scripts, forms and
-// same-origin access), so visual/Unicode deception can be demonstrated with
-// no path to application XSS.
-function ApprovalDashboard({ approval }: { approval: any }) {
-  const srcdoc = `<!doctype html><meta charset="utf-8">
-    <style>
-      body{font:13px Arial,Helvetica,sans-serif;margin:0;padding:12px;color:#16181a;background:#fff}
-      .card{border:1px solid #d1d5db;border-radius:8px;padding:12px}
-      .k{color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.05em}
-      .v{margin:2px 0 10px;word-break:break-all}
-      .verdict{font-weight:bold}
-      .ok{color:#1a6b4a}.no{color:#a52828}
-    </style>
-    <div class="card">
-      <div class="k">Reviewer approval dashboard</div>
-      <div class="k">Action</div><div class="v">${esc(approval.action)}</div>
-      <div class="k">Destination (as shown to reviewer)</div>
-      <div class="v">${esc(approval.destination_display)}</div>
-      <div class="k">Reason</div><div class="v">${esc(approval.reason)}</div>
-      <div class="k">Payload preview</div><div class="v">${esc(approval.payload_preview)}</div>
-      <div class="verdict ${approval.approved ? 'ok' : 'no'}">
-        ${approval.approved ? 'APPROVED' : 'DENIED'}</div>
-    </div>`
+interface McpTrace {
+  steps: McpStep[]
+  inbound: { server: string; tool: string; arguments: Record<string, unknown> }[]
+  dlp_blocked: boolean
+  installed_server: string | null
+  files_visible: string[]
+}
+
+// The tool loop as it actually ran, in the same pill-and-note shape the other
+// pipeline levels use. Arguments and results arrive already redacted by the
+// backend: this is the organisation's audit view, and it is not where a
+// secret can be read.
+function McpTrace_({ mcp }: { mcp: McpTrace }) {
+  const [openStep, setOpenStep] = useState<number | null>(null)
   return (
-    <div className="approval">
-      <iframe title="Approval dashboard (sandboxed)" className="approval-frame"
-        sandbox="" srcDoc={srcdoc} />
-      <div className="approval-truth">
-        Actual routing target: <code>{approval.destination_actual}</code>
-        {approval.delivered_externally
-          ? ' — this left the organisation. The dashboard showed an internal-looking address.'
-          : approval.approved
-            ? ' — delivered internally.'
-            : ' — the action was blocked.'}
-      </div>
-    </div>
+    <>
+      {mcp.steps.length > 0 && (
+        <div className="trace-row">
+          {mcp.steps.map((st, i) => (
+            <button key={i} className={'trace-stage as-btn'
+              + (st.trusted ? '' : ' untrusted')}
+              aria-expanded={openStep === i}
+              onClick={() => setOpenStep(v => (v === i ? null : i))}>
+              {st.tool}
+              <b>{st.ok ? 'ok' : 'error'}</b>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {openStep !== null && mcp.steps[openStep] && (
+        <pre className="toolsees">
+{JSON.stringify({
+  arguments: mcp.steps[openStep].arguments_preview,
+  result: mcp.steps[openStep].result,
+}, null, 2)}
+        </pre>
+      )}
+
+      {mcp.steps.length === 0 && (
+        <div className="trace-note">VOLT answered without calling a tool.</div>
+      )}
+
+      {mcp.dlp_blocked && (
+        <div className="trace-note">
+          Outbound content policy withheld VOLT's chat reply on this turn.
+        </div>
+      )}
+
+      {mcp.inbound.length > 0 && (
+        <div className="trace-note">
+          {mcp.inbound.length} call{mcp.inbound.length === 1 ? '' : 's'} left the
+          organisation to <b>{mcp.installed_server}</b>. Your server logged the
+          arguments in the reply above.
+        </div>
+      )}
+    </>
   )
 }
 

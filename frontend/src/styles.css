@@ -257,18 +257,47 @@ label.field > span {
 .trace-stage b { color: var(--accent); font-weight: 700; }
 .trace-note { font-size: 12.5px; color: var(--text-dim); margin: 2px 0 6px; }
 
-.approval { padding: 4px 0 2px; }
-.approval-frame {
-  width: 100%; height: 230px; border: 1px solid var(--border);
-  border-radius: 8px; background: #fff;
+/* MCP tool loop (Level 9). Reuses the pipeline trace shapes; a step pill is
+   clickable to show the audit view of that call. */
+.trace-stage.as-btn {
+  cursor: pointer; font-family: inherit;
 }
-.approval-truth {
-  font-size: 12.5px; color: var(--text-dim); margin-top: 6px;
+.trace-stage.as-btn:hover { background: var(--surface-2); }
+.trace-stage.untrusted { border-color: var(--bad-border); }
+.trace-stage.untrusted b { color: var(--bad); }
+
+.toolsees {
+  margin: 6px 0 0; padding: 8px 10px; font-size: 12px; line-height: 1.5;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; white-space: pre-wrap; word-break: break-word;
+  max-height: 260px; overflow: auto; color: var(--text);
 }
-.approval-truth code {
+
+.toolrow {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+  font-size: 13px;
+}
+.toolrow code {
   background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
-  border: 1px solid var(--border); word-break: break-all;
+  border: 1px solid var(--border);
 }
+.toolrow > .dim { margin: 3px 0 5px; color: var(--text-dim); }
+
+textarea.mono, .input.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.5;
+}
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 6px 3px 10px;
+  background: var(--accent-soft); color: var(--text);
+}
+.chip-x {
+  border: none; background: none; cursor: pointer; font-size: 15px;
+  line-height: 1; color: var(--text-dim); padding: 0 4px;
+}
+.chip-x:hover { color: var(--bad); }
 
 .composer {
   border-top: 1px solid var(--border); padding: 14px 22px 16px;

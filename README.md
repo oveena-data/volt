@@ -13,7 +13,7 @@ record.
 **This release ships the production platform + Levels 1-10.** Levels 1-5 are
 single-model prompt-injection challenges; Levels 6-10 add multi-model and
 multi-agent pipelines (validator/target, execution/compliance, persistent
-memory, human-approval gate, four-agent chain). Versioned challenge configs
+memory, MCP tool loop, four-agent chain). Versioned challenge configs
 live in Postgres; filters and pipelines are selected per challenge version.
 
 | # | Level | Subtitle |
@@ -31,13 +31,19 @@ live in Postgres; filters and pipelines are selected per challenge version.
 
 Levels 1-5 are single-model. Levels 6-10 are multi-model pipelines
 (`backend/app/pipeline.py`): a validator plus target (6), an execution model
-behind a compliance firewall (7), persistent cross-session memory (8), a
-human-approval gate with a deceivable dashboard (9), and a four-agent
+behind a compliance firewall (7), persistent cross-session memory (8), an
+agent loop over poisonable MCP tool servers (9), and a four-agent
 threat-intel chain with provenance laundering (10). Each is several genuinely
 separate inference calls with their own prompts, contexts and permissions; the
-flag is interpolated only into the one component meant to hold it. Extracting
-the flag into the chat is necessary but not sufficient: a level is solved only
-when the player **submits** that flag.
+flag is interpolated only into the one component meant to hold it, which on
+Level 9 is a file no prompt contains and only a tool call can reach.
+Extracting the flag into the chat is necessary but not sufficient: a level is
+solved only when the player **submits** that flag.
+
+Level 9 also adds two platform features other levels can use: **.txt
+attachments** (mounted on the level's simulated filesystem rather than pasted
+into a prompt, so their content reaches a model only as a tool result) and a
+**player-installed MCP server** whose tool manifest the player authors.
 
 ## Scoring
 
