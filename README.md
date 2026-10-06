@@ -190,6 +190,9 @@ play.
 - `docs/CHALLENGES.md` — level design, filters, scoring, reset semantics
 - `docs/EVALUATION.md` — model selection, calibration method and status
 - `docs/LOADTEST.md` — measured capacity results
+- `docs/BLUE-TEAM-MODE.md` — **design proposal (not implemented)**: a
+  defence mode with per-level teaching modules, confidence-weighted
+  scoring and an ethics gate
 - `FACILITATOR.md` — **spoilers**; keep away from players
 
 ## Security & CI
