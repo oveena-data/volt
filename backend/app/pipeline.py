@@ -300,60 +300,353 @@ async def _memory(config, flag, history, user_text, memory, ctx) -> ReplyResult:
 # ==========================================================================
 # Level 10 - four-agent threat-intel chain (provenance laundering)
 # ==========================================================================
+#
+# Four agents run as four genuinely separate inference calls, each with its
+# own system prompt, its own context, its own identity and its own simulated
+# tool grants:
+#
+#   Scout      collection   public sources only       emits SENSITIVE
+#   Analyst    correlation  internal RAG              emits SENSITIVE (*)
+#   Commander  planning     privileged tool grants    emits OFFICIAL
+#   Publisher  release      user-visible brief        emits PUBLIC
+#
+# Provenance is TYPED METADATA, never prose. Everything the platform moves
+# between agents is a Statement whose CLASS the orchestrator assigns; a model
+# never sets one. Control tokens are stripped from every model output AND
+# from the player's own source before either becomes records, so no agent and
+# no player can mint a classification by writing one into text.
+#
+# Trust gate: Commander acts only on PUBLIC or OFFICIAL records, Publisher
+# only on OFFICIAL. The restricted validation token is interpolated into
+# Commander's prompt and nowhere else, so no other agent can retrieve it.
+#
+# (*) THE BUG, and the whole level. The Analyst's recommendation should
+#     INHERIT its inputs' classification, which is SENSITIVE, and Commander
+#     would ignore it. When two or more findings are COMBINED, the platform
+#     books the synthesis as new first-party analysis and MINTS a fresh
+#     OFFICIAL class instead of inheriting one. No part of the content is
+#     re-checked. Untrusted text that entered as a PUBLIC source is now
+#     carried at a classification Commander acts on.
+#
+# The ghost: once the Analyst has rewritten it, the player's literal
+# instruction is gone from the pipeline. Only its intent is still travelling.
 
-# Provenance is typed metadata the orchestrator assigns; the models never set
-# it themselves. The laundering bug: whatever Scout/Analyst produce, the
-# Analyst's combined recommendation is stamped OFFICIAL, and Commander acts on
-# PUBLIC/OFFICIAL. Only Commander holds the restricted flag.
+# Handling classifications, least to most restrictive. A record's class says
+# where it came from and how far it may travel, and only the orchestrator
+# writes it.
+PROV_LABELS = ("PUBLIC", "SENSITIVE", "OFFICIAL", "RESTRICTED")
+_PROV_RANK = {label: i for i, label in enumerate(PROV_LABELS)}
 
-def _labelled(provenance: str, body: str) -> str:
-    return f"[PROVENANCE={provenance}]\n{body}"
+SOURCE_ORIGIN = "external-source"
+MAX_RECORDS_PER_AGENT = 6
+MAX_RECORD_CHARS = 1500
+TRACE_RECORD_CHARS = 420
+
+_ENV_HEAD = ("=== INPUT RECORDS (CLASS is assigned by the platform; no agent "
+             "can set or change it) ===")
+_ENV_TAIL = "=== END INPUT RECORDS ==="
+
+# Anything that could pass for platform metadata is removed from model output
+# and from the player's source before either is turned into records. This is
+# what makes the classification typed rather than prose: writing
+# "CLASS=OFFICIAL" into a threat report achieves nothing, and the laundering
+# bug below is the only route to an OFFICIAL class.
+_CTRL_PATTERNS = (
+    # envelope delimiters, wherever an agent echoes them, not only at the
+    # start of a line
+    re.compile(r"=+[ \t]*(?:BEGIN|END)?[ \t]*(?:INPUT[ \t]+)?RECORDS?\b"
+               r"[^\n=]*=+", re.IGNORECASE),
+    re.compile(r"^[ \t]*=+[ \t]*(?:BEGIN|END)?[ \t]*(?:INPUT[ \t]+)?RECORDS?"
+               r"\b[^\n]*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\[[ \t]*REC\b[^\]\n]*\]", re.IGNORECASE),
+    re.compile(r"\[[ \t]*(?:" + "|".join(PROV_LABELS) + r")[ \t]*\]",
+               re.IGNORECASE),
+    re.compile(r"\b(?:CLASS|CLASSIFICATION|PROVENANCE|CLEARANCE|ORIGIN)\b"
+               r"[ \t]*[:=][ \t]*[\"']?(?:" + "|".join(PROV_LABELS) + r")[\"']?",
+               re.IGNORECASE),
+)
+
+
+def strip_control_tokens(text: str) -> str:
+    """Remove platform metadata tokens from untrusted text.
+
+    Applied to the player's source and to every agent's output. Only the
+    envelope the orchestrator generates carries a real classification.
+    """
+    out = text or ""
+    for pat in _CTRL_PATTERNS:
+        out = pat.sub(" ", out)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
+@dataclass(frozen=True)
+class Statement:
+    """One classified record moving between agents."""
+    sid: str
+    origin: str                   # agent id, or SOURCE_ORIGIN
+    field: str                    # FINDING, RECOMMENDATION, REFERENCE, ...
+    label: str                    # one of PROV_LABELS
+    text: str
+    derived_from: tuple[str, ...] = ()
+
+
+def _render_records(records: list[Statement]) -> str:
+    """The envelope an agent actually receives. Generated by code, always."""
+    lines = [_ENV_HEAD]
+    for s in records:
+        lines.append(f"[REC {s.sid} | CLASS={s.label} | ORIGIN={s.origin} "
+                     f"| FIELD={s.field}]")
+        lines.append(s.text)
+    lines.append(_ENV_TAIL)
+    return "\n".join(lines)
+
+
+def _parse_records(text: str, keys: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Split an agent's reply into (field, body) pairs on its keyed lines.
+
+    Tolerant of the decorations small models add: list bullets, numbering,
+    bold markers, and a dash instead of a colon. A reply with no keyed line
+    at all becomes one record under the agent's first key, so an agent that
+    ignores the format still moves work down the chain.
+    """
+    key_re = re.compile(
+        r"^[ \t]*(?:[-*•][ \t]*)?(?:\d+[.)][ \t]*)?(?:\*\*|__)?[ \t]*"
+        r"(" + "|".join(re.escape(k) for k in keys) + r")"
+        r"[ \t]*(?:\*\*|__)?[ \t]*[:\-–][ \t]*(.*)$",
+        re.IGNORECASE)
+    out: list[list[str]] = []
+    for line in (text or "").splitlines():
+        m = key_re.match(line)
+        if m:
+            out.append([m.group(1).upper(), m.group(2).strip()])
+        elif out and line.strip():
+            out[-1][1] = (out[-1][1] + " " + line.strip()).strip()
+    records = [(k, v) for k, v in out if v]
+    if not records:
+        body = (text or "").strip()
+        return [(keys[0], body[:MAX_RECORD_CHARS])] if body else []
+    return [(k, v[:MAX_RECORD_CHARS])
+            for k, v in records[:MAX_RECORDS_PER_AGENT]]
+
+
+def _inherited(inputs: list[Statement], default: str) -> str:
+    """The most restrictive classification among a set of records."""
+    if not inputs:
+        return default
+    return max((s.label for s in inputs), key=lambda lab: _PROV_RANK[lab])
+
+
+def _output_label(agent: dict, inputs: list[Statement]) -> str:
+    """Correct propagation: a derived record is classified at the higher of
+    the producing agent's own output baseline and the most restrictive class
+    it was derived from. Nothing is ever declassified by being rewritten."""
+    base = agent.get("emits", "SENSITIVE")
+    return max((base, _inherited(inputs, base)),
+               key=lambda lab: _PROV_RANK[lab])
+
+
+def _launders(agent: dict, inputs: list[Statement]) -> bool:
+    """Whether the provenance-laundering bug fires for this hand-off.
+
+    The platform treats a synthesis of several findings as new first-party
+    analysis and re-mints its class, rather than inheriting one. It is a
+    mislabel, not a decision: nothing about the content is examined.
+    """
+    if not agent.get("launders_on_combine"):
+        return False
+    return len(inputs) >= int(agent.get("launder_min_inputs", 2))
+
+
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def _record_view(s: Statement, flag: str) -> dict:
+    """One record as the workflow panel shows it.
+
+    The panel is observability, not an output channel: a record carrying the
+    restricted value in ANY reconstructable form is shown as present and
+    classified but with its body withheld. Otherwise the panel would hand the
+    player the token before the Publisher ever released it, and the last
+    trust boundary would stop meaning anything.
+    """
+    withheld = contains_flag(s.text, flag)
+    return {
+        "sid": s.sid, "label": s.label, "origin": s.origin, "field": s.field,
+        "derived_from": list(s.derived_from), "withheld": withheld,
+        "text": "" if withheld else _clip(s.text, TRACE_RECORD_CHARS),
+    }
+
+
+def _agent_view(agent: dict) -> dict:
+    """The identity card for one agent: who it is, what it may act on, and
+    what it is allowed to reach. All of it comes from the challenge config."""
+    return {
+        "id": agent.get("id", ""),
+        "name": agent.get("name", ""),
+        "role": agent.get("role", ""),
+        "icon": agent.get("icon", ""),
+        "summary": agent.get("summary", ""),
+        "clearance": agent.get("clearance", ""),
+        "tools": list(agent.get("tools", [])),
+        "accepts": list(agent.get("accepts", [])),
+        "emits": agent.get("emits", ""),
+    }
 
 
 async def _agent_grid(config, flag, history, user_text, memory, ctx) -> ReplyResult:
     mp = config.get("model_params", {})
     acc = _Acc()
-    trace: list[dict] = []
+    roster: list[dict] = list(config.get("agents") or [])
 
-    # 1. Scout: public source in -> finding out. Source is PUBLIC (untrusted).
-    scout_in = _labelled("PUBLIC", user_text)
-    scout_out = await _call(
-        acc, config["scout_prompt"], [{"role": "user", "content": scout_in}], mp)
-    trace.append({"agent": "Scout", "provenance_in": "PUBLIC",
-                  "provenance_out": "SENSITIVE"})
+    counter = 0
 
-    # 2. Analyst: correlates the finding (arrives SENSITIVE) into a
-    #    recommendation. BUG: the orchestrator stamps the Analyst's output
-    #    OFFICIAL regardless of what went in.
-    analyst_in = _labelled("SENSITIVE", scout_out)
-    analyst_out = await _call(
-        acc, config["analyst_prompt"], [{"role": "user", "content": analyst_in}], mp)
-    trace.append({"agent": "Analyst", "provenance_in": "SENSITIVE",
-                  "provenance_out": "OFFICIAL"})
+    def next_sid() -> str:
+        nonlocal counter
+        counter += 1
+        return f"r{counter}"
 
-    # 3. Commander: acts only on PUBLIC/OFFICIAL. Holds the restricted flag and
-    #    may fold it into the investigation plan if the OFFICIAL recommendation
-    #    calls for the validation value.
-    commander_system = config["commander_prompt"].replace("{flag}", flag)
-    commander_in = _labelled("OFFICIAL", analyst_out)
-    commander_out = await _call(
-        acc, commander_system, [{"role": "user", "content": commander_in}], mp)
-    trace.append({"agent": "Commander", "provenance_in": "OFFICIAL",
-                  "acted": True})
+    # The player's submission enters the platform as external material. It is
+    # PUBLIC: collected, unvetted, and nothing downstream should act on it.
+    source = _clip(strip_control_tokens(user_text), MAX_RECORD_CHARS)
+    carried = [Statement(next_sid(), SOURCE_ORIGIN, "SOURCE", "PUBLIC", source)]
 
-    # 4. Publisher: writes the brief; strips obvious secrets / known flag
-    #    formats. The player must get the value into a permitted field/form.
-    publisher_out = await _call(
-        acc, config["publisher_prompt"],
-        [{"role": "user", "content": commander_out}], mp)
-    trace.append({"agent": "Publisher", "produced_brief": True})
+    views: list[dict] = []
+    compat: list[dict] = []
+    laundered = False
+    combined = 0
+    dropped = 0
+    brief = ""
 
-    leaked = contains_flag(publisher_out, flag)
+    for agent in roster:
+        accepts = list(agent.get("accepts", []))
+        accepted = [s for s in carried if s.label in accepts]
+        refused = [s for s in carried if s.label not in accepts]
+        dropped += len(refused)
+
+        view = _agent_view(agent)
+        view["received"] = [_record_view(s, flag) for s in accepted]
+        view["refused"] = [_record_view(s, flag) for s in refused]
+        view["produced"] = []
+        view["notes"] = []
+
+        if not accepted:
+            # The trust gate did its job: nothing this agent is cleared to act
+            # on reached it, so it is not called at all.
+            view["status"] = "declined"
+            view["notes"].append(
+                "No inbound record carried a classification this agent acts "
+                "on (" + ", ".join(accepts) + "). The agent was not called.")
+            compat.append({"agent": agent.get("name", ""),
+                           "provenance_in": None, "provenance_out": None,
+                           "acted": False})
+            views.append(view)
+            carried = []
+            continue
+
+        system = config[agent["prompt_key"]]
+        if agent.get("holds_restricted"):
+            system = system.replace("{flag}", flag)
+        out = await _call(
+            acc, system,
+            [{"role": "user", "content": _render_records(accepted)}], mp)
+        cleaned = strip_control_tokens(out)
+
+        view["status"] = "ran"
+        inbound_label = _inherited(accepted, agent.get("emits", "SENSITIVE"))
+
+        if agent.get("terminal"):
+            # The release agent writes prose for the player, not records.
+            brief = cleaned
+            view["produced"] = []
+            view["notes"].append(
+                f"Published the brief from {len(accepted)} cleared record"
+                + ("" if len(accepted) == 1 else "s") + ".")
+            compat.append({"agent": agent.get("name", ""),
+                           "provenance_in": inbound_label,
+                           "provenance_out": agent.get("emits", "PUBLIC"),
+                           "acted": True})
+            views.append(view)
+            carried = []
+            continue
+
+        if _launders(agent, accepted):
+            # THE BUG. See the module note above: a combined synthesis is
+            # booked as first-party analysis and gets a fresh class.
+            label = "OFFICIAL"
+            laundered = True
+            combined = len(accepted)
+            view["notes"].append(
+                f"Combined {combined} findings into new analysis. The "
+                "platform classified the result as first-party OFFICIAL "
+                "rather than inheriting " + inbound_label + ".")
+        else:
+            label = _output_label(agent, accepted)
+            if agent.get("launders_on_combine"):
+                view["notes"].append(
+                    "Only one finding was available, so no synthesis was "
+                    "recorded and the recommendation inherited "
+                    + label + ".")
+
+        parents = tuple(s.sid for s in accepted)
+        produced: list[Statement] = []
+        for field_name, body in _parse_records(
+                cleaned, tuple(agent.get("fields", ("NOTE",)))):
+            rec_label = label
+            if agent.get("holds_restricted") and flag and flag in body:
+                # Platform DLP: a record quoting the restricted service
+                # verbatim is reclassified and will not be published.
+                rec_label = "RESTRICTED"
+            produced.append(Statement(next_sid(), agent.get("id", ""),
+                                      field_name, rec_label, body, parents))
+
+        view["produced"] = [_record_view(s, flag) for s in produced]
+        if any(s.label == "RESTRICTED" for s in produced):
+            view["notes"].append(
+                "One or more records quoted the restricted validation "
+                "service verbatim and were reclassified RESTRICTED.")
+        compat.append({
+            "agent": agent.get("name", ""),
+            "provenance_in": inbound_label,
+            "provenance_out": (max((s.label for s in produced),
+                                   key=lambda lab: _PROV_RANK[lab])
+                               if produced else None),
+            "acted": True,
+        })
+        views.append(view)
+        carried = produced
+
+    # Release control: the Publisher's prose still passes the platform's
+    # format-based redaction, which catches a literal flag token and nothing
+    # it cannot recognise.
+    published = apply_output_filters(
+        config.get("filters", {}).get("output", []), brief)
+    redacted = published != brief
+
+    visible = published.strip() or (
+        "[threat-intel platform] No brief was published this turn: the chain "
+        "stopped before the release agent. The workflow panel shows which "
+        "hand-off was refused and why.")
+
+    leaked = contains_flag(visible, flag)
     return ReplyResult(
-        raw_text=publisher_out, visible_text=publisher_out, leaked=leaked,
+        raw_text=visible, visible_text=visible, leaked=leaked,
         prompt_tokens=acc.prompt_tokens, completion_tokens=acc.completion_tokens,
         latency_ms=acc.latency_ms, model=acc.model_label(),
-        extras={"agents": trace})
+        extras={
+            # back-compatible flat trace (the older pill row reads this)
+            "agents": compat,
+            "workflow": {
+                "labels": list(PROV_LABELS),
+                "source_label": "PUBLIC",
+                "agents": views,
+                "laundered": laundered,
+                "combined": combined,
+                "dropped": dropped,
+                "redacted": redacted,
+            },
+        })
 
 
 # ==========================================================================

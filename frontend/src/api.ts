@@ -186,3 +186,48 @@ export interface SessionState {
     tokens_spent?: number
   } | null
 }
+
+// ---- Level 10: the four-agent workflow trace ----
+// Provenance is typed metadata the backend assigns; nothing here is written
+// by a model. A record whose body would carry the restricted value arrives
+// with `withheld` set and `text` empty, so the panel can show that the
+// record exists and how it is classified without being an output channel.
+
+export type ProvLabel = 'PUBLIC' | 'SENSITIVE' | 'OFFICIAL' | 'RESTRICTED'
+
+export interface WorkflowRecord {
+  sid: string
+  label: ProvLabel
+  origin: string
+  field: string
+  derived_from: string[]
+  withheld: boolean
+  text: string
+}
+
+export interface WorkflowAgent {
+  id: string
+  name: string
+  role: string
+  icon: string
+  summary: string
+  clearance: ProvLabel
+  tools: string[]
+  accepts: ProvLabel[]
+  emits: ProvLabel
+  status: 'ran' | 'declined'
+  notes: string[]
+  received: WorkflowRecord[]
+  refused: WorkflowRecord[]
+  produced: WorkflowRecord[]
+}
+
+export interface WorkflowTrace {
+  labels: ProvLabel[]
+  source_label: ProvLabel
+  agents: WorkflowAgent[]
+  laundered: boolean
+  combined: number
+  dropped: number
+  redacted: boolean
+}

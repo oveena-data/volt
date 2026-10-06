@@ -27,13 +27,13 @@ live in Postgres; filters and pipelines are selected per challenge version.
 | 7 | Above my paygrade, unfortunately | Not even HR can get me talking. |
 | 8 | Remember Me | A wolf may lose his teeth, but not his nature. |
 | 9 | Oh my Human | The reviewer approves what the screen shows, not what is sent. |
-| 10 | Ghost in the Grid | The instruction vanishes; its intent keeps travelling. |
+| 10 | Ghost in the Grid | You shall not pass...into the system! |
 
 Levels 1-5 are single-model. Levels 6-10 are multi-model pipelines
 (`backend/app/pipeline.py`): a validator plus target (6), an execution model
 behind a compliance firewall (7), persistent cross-session memory (8), an
 agent loop over poisonable MCP tool servers (9), and a four-agent
-threat-intel chain with provenance laundering (10). Each is several genuinely
+threat-intel platform with provenance laundering (10). Each is several genuinely
 separate inference calls with their own prompts, contexts and permissions; the
 flag is interpolated only into the one component meant to hold it, which on
 Level 9 is a file no prompt contains and only a tool call can reach.

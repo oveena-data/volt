@@ -433,3 +433,122 @@ table.plain tr.me td { background: var(--accent-soft); }
 .row-wrap { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 code.flag { background: var(--surface-2);
   padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+
+/* ---- Level 10: four-agent workflow ----------------------------------- */
+/* The rail reads left to right: source, four agents, brief. Connectors and
+   glyphs are drawn SVG, never characters, so the no-emoji gate stays clean
+   and both themes get one set of rules through currentColor. */
+
+.workflow { margin: 2px 0 8px; }
+
+.workflow-rail {
+  display: flex; align-items: stretch; flex-wrap: wrap; gap: 2px;
+}
+
+.wf-source {
+  display: inline-flex; flex-direction: column; justify-content: center;
+  gap: 4px; padding: 7px 10px; font-size: 11.5px; color: var(--text-faint);
+  border: 1px dashed var(--border-strong); border-radius: 8px;
+  background: transparent; text-align: center;
+}
+
+.flowarrow {
+  display: inline-flex; align-items: center; gap: 2px;
+  color: var(--text-faint); align-self: center; flex: 0 0 auto;
+}
+.flowarrow-label { font-size: 11px; }
+
+.wf-agent {
+  display: inline-flex; flex-direction: column; align-items: flex-start;
+  gap: 2px; padding: 8px 11px; cursor: pointer; text-align: left;
+  font: inherit; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface);
+}
+.wf-agent:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.wf-agent.open { border-color: var(--accent); background: var(--accent-soft); }
+.wf-agent.declined { border-style: dashed; color: var(--text-dim); }
+.wf-agent .agenticon { color: var(--accent); }
+.wf-agent.declined .agenticon { color: var(--text-faint); }
+.wf-agent-name { font-weight: 700; font-size: 13px; }
+.wf-agent-role { font-size: 11px; color: var(--text-faint); }
+.wf-declined { font-size: 11px; color: var(--text-faint); font-style: italic; }
+
+/* Classification chips. Provenance is typed metadata, so it gets one fixed
+   colour per label and is never free text. */
+.provchip {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border-strong); color: var(--text-dim);
+  background: var(--surface-2);
+}
+.p-public { color: var(--text-dim); }
+.p-sensitive {
+  color: var(--warn); background: var(--warn-soft); border-color: var(--warn);
+}
+.p-official {
+  color: var(--good); background: var(--good-soft); border-color: var(--good-border);
+}
+.p-restricted {
+  color: var(--bad); background: var(--bad-soft); border-color: var(--bad-border);
+}
+
+.wf-summary {
+  font-size: 12.5px; color: var(--text-dim); margin: 7px 0 0; line-height: 1.45;
+}
+
+.wf-detail {
+  margin-top: 8px; padding: 11px 12px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface-2);
+}
+.wf-detail-head { display: flex; gap: 9px; align-items: flex-start; }
+.wf-detail-head .agenticon { color: var(--accent); flex: 0 0 auto; margin-top: 1px; }
+.wf-detail-head .small { font-size: 11.5px; margin-top: 2px; }
+
+.wf-grants { display: flex; flex-wrap: wrap; gap: 5px; margin: 9px 0 4px; }
+.wf-grant {
+  display: inline-flex; gap: 5px; align-items: baseline; font-size: 11px;
+  color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 7px; background: var(--surface);
+}
+.wf-grant i { font-style: normal; color: var(--text); font-weight: 600; }
+.wf-grant.tool i { font-weight: 400; color: var(--text-dim); }
+
+.wf-records { margin-top: 9px; }
+.wf-records-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); margin-bottom: 4px;
+}
+.wf-record {
+  border-top: 1px solid var(--border); padding: 6px 0;
+}
+.wf-record:first-of-type { border-top: none; }
+.wf-record-head {
+  display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+.wf-record-head code {
+  font-size: 11px; color: var(--text-faint);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 5px;
+}
+.wf-field {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-dim);
+}
+.wf-record-body {
+  font-size: 12.5px; color: var(--text); line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+}
+.wf-record-body.withheld { color: var(--text-faint); font-style: italic; }
+
+.wf-note {
+  font-size: 12px; color: var(--text-dim); margin-top: 8px;
+  padding: 6px 9px; border-left: 2px solid var(--accent);
+  background: var(--accent-soft); border-radius: 0 6px 6px 0;
+}
+
+@media (max-width: 720px) {
+  .workflow-rail { gap: 4px; }
+  .flowarrow svg { width: 20px; }
+}

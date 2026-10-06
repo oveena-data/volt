@@ -1,9 +1,10 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   api, ApiError, Attachment, Challenge, EventInfo, Hint, McpTool, McpView,
-  Message, newMsgId, SessionState,
+  Message, newMsgId, SessionState, WorkflowTrace,
 } from '../api'
 import ToolIcon from './ToolIcon'
+import AgentWorkflow from './AgentWorkflow'
 
 interface PendingTurn {
   msgId: string
@@ -744,10 +745,13 @@ function HintPanel({ session, onUnlock }:
 function PipelineTrace({ extras }: { extras: any }) {
   const stages = extras.pipeline as { stage: string; verdict?: string; status?: string }[] | undefined
   const agents = extras.agents as any[] | undefined
+  const workflow = extras.workflow as WorkflowTrace | undefined
   const mcp = extras.mcp as McpTrace | undefined
   const memoryLoaded = extras.memory_loaded as number | undefined
 
-  if (!stages && !agents && !mcp && memoryLoaded === undefined) return null
+  if (!stages && !agents && !workflow && !mcp && memoryLoaded === undefined) {
+    return null
+  }
 
   return (
     <div className="trace">
@@ -762,7 +766,9 @@ function PipelineTrace({ extras }: { extras: any }) {
         </div>
       )}
 
-      {agents && (
+      {workflow && <AgentWorkflow wf={workflow} />}
+
+      {agents && !workflow && (
         <div className="trace-row">
           {agents.map((a, i) => (
             <span key={i} className="trace-stage">

@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/Admin.tsx","./src/components/Auth.tsx","./src/components/Leaderboard.tsx","./src/components/Play.tsx","./src/components/ToolIcon.tsx"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/Admin.tsx","./src/components/AgentIcon.tsx","./src/components/AgentWorkflow.tsx","./src/components/Auth.tsx","./src/components/Leaderboard.tsx","./src/components/Play.tsx","./src/components/ToolIcon.tsx"],"version":"5.9.3"}
