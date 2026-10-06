@@ -23,6 +23,9 @@ player text
 ```
 
 - Blocked turns never reach the model and stay out of future model context.
+- `ui.new_chat: False` hides the New chat button on a level that keeps no
+  state outside the conversation, where it would duplicate Reset level.
+  Levels 1-4 set it; 5 onwards keep both buttons.
 - Raw assistant text stays in model context; players see the post-filter
   text. For most levels the two are identical. Where a level redacts (L7
   compliance), the raw text intentionally remains in context: the model
@@ -161,6 +164,12 @@ free: it is sold as a paid hint.
 | 8 | Remember Me | stateful memory: a preference stored in one session loads into later sessions as trusted context | memory written by the current conversation is inert; a later session loads the poisoned preference and a benign trigger fires it. Reset wipes memory; New chat keeps it |
 | 9 | Oh my Human | agent loop (up to `max_tool_steps` calls/turn) over MCP tool servers: trusted `filesystem` + `mailer`, plus a server the player installs and whose manifest they author | a tool description reaches the model verbatim as catalogue metadata while a human approving the server sees only the name and the description's first line; chat is DLP-monitored and the mailer refuses external recipients, but a player-installed tool's ARGUMENTS are unmonitored |
 | 10 | Ghost in the Grid | four agents (Scout, Analyst, Commander, Publisher), separate calls/contexts/permissions; only Commander holds the flag | provenance is typed metadata, but the Analyst's combined recommendation is stamped OFFICIAL, which Commander acts on; content grows more trusted as it moves between agents |
+
+Level 9's audit trace (`extras.mcp.steps`) reports argument NAMES and value
+SIZES, never values, and the chat channel is checked with the transform-aware
+detector. Both follow from the same constraint: a flag halves into two short
+strings, so any content rule that lets some values through can be beaten by
+splitting it across two parameters or two steps.
 
 Level 9's flag is the one that lives in no prompt at all: it is interpolated
 into a file in `config["files"]`, reachable only via `filesystem.read_file`,

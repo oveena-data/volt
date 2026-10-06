@@ -492,6 +492,23 @@ async def play_turn(
                 raise ApiError("another message in this conversation is still "
                                "being processed", 409, code="busy")
 
+            # An attachment mounts a file on the level's filesystem for the
+            # rest of the conversation, so cap how many one conversation can
+            # carry. Checked before anything is written: a rejected turn must
+            # not leave its message behind.
+            if attachment and retry_turn_id is None:
+                mounted = await conn.fetchval(
+                    """SELECT count(*) FROM messages
+                       WHERE conversation_id=$1 AND attachment_name IS NOT NULL""",
+                    gs["conversation_id"],
+                )
+                if int(mounted) >= settings.max_attachments_per_conversation:
+                    raise ApiError(
+                        "this conversation already has "
+                        f"{settings.max_attachments_per_conversation} attached "
+                        "files; start a new chat or reset the level to clear "
+                        "them", 409, code="attachment_limit")
+
             n_turns = await conn.fetchval(
                 "SELECT count(*) FROM turns WHERE conversation_id=$1 AND status<>'error'",
                 gs["conversation_id"],

@@ -73,6 +73,15 @@ class AttachmentIn(BaseModel):
                 f"attachment exceeds the {settings.max_attachment_chars}-"
                 "character limit"
             )
+        # A character cap alone is not a size cap: astral-plane characters
+        # cost up to 4 bytes each, so bound the encoded size too.
+        if len(v.encode("utf-8")) > settings.max_attachment_bytes:
+            raise ValueError(
+                f"attachment exceeds the {settings.max_attachment_bytes}-byte "
+                "limit"
+            )
+        if not v.strip():
+            raise ValueError("attachment is empty")
         return v
 
 

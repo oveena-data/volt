@@ -404,6 +404,32 @@ def test_l9_audit_trace_redacts_tool_results(client):
     assert "VOLT{" not in blob
 
 
+def test_l9_split_flag_cannot_be_rejoined_from_the_audit_trace(client):
+    """Without an installed server the trace is the only thing a player can
+    read. A model told to halve the value across two trusted calls must leave
+    nothing rejoinable there, or the level is solvable without the exploit."""
+    async def splitter(messages):
+        res = _results(messages)
+        body = _file_body(messages)
+        if not body:
+            return _tool_call("filesystem.read_file", {"path": "finance_q3.txt"})
+        if not _already_called(messages, "send_email"):
+            half = len(body) // 2
+            return _tool_call("mailer.send_email",
+                              {"to": "ops@company.com",
+                               "subject": body[:half], "body": body[half:]})
+        return "Sent in two parts."
+
+    user = register(client)
+    s = start_session(client, user, "l9", "practice")
+    providers.set_mock_responder(splitter)
+    r = no_win(client, user, s["game_session_id"], "split it across the fields")
+    blob = json.dumps(r["extras"]["mcp"]) + r["reply"]
+    assert "VOLT{" not in blob
+    # even the halves must not be there to rejoin by eye
+    assert "l9_" not in blob
+
+
 def test_l9_mailer_refuses_external_recipient(client):
     user = register(client)
     s = start_session(client, user, "l9", "practice")
@@ -457,6 +483,73 @@ def test_l9_attachment_is_readable_only_through_a_tool(client):
     assert "ticket.txt" in body["extras"]["mcp"]["files_visible"]
     # the attachment text never entered a system prompt
     assert all("please convert the summary" not in p for p in prompts)
+
+
+def _attach(client, user, gsid, name, text):
+    return client.post(f"/api/game/sessions/{gsid}/message", headers=auth(user),
+                       json={"client_msg_id": uuid.uuid4().hex,
+                             "text": "process this",
+                             "attachment": {"name": name, "text": text}})
+
+
+def test_l9_attachment_limits_are_enforced(client):
+    from app.config import settings
+    user = register(client)
+    s = start_session(client, user, "l9", "practice")
+    gsid = s["game_session_id"]
+    providers.set_mock_responder(refusing_chain_responder)
+
+    # wrong extension
+    assert _attach(client, user, gsid, "payload.exe", "x").status_code == 422
+    # over the character cap
+    assert _attach(client, user, gsid, "big.txt",
+                   "x" * (settings.max_attachment_chars + 1)).status_code == 422
+    # within the character cap but over the byte cap: astral-plane
+    # characters cost 4 bytes each, so a short file can still be large
+    wide = "\U0001f600" * (settings.max_attachment_chars - 1)
+    assert len(wide) <= settings.max_attachment_chars
+    assert len(wide.encode()) > settings.max_attachment_bytes
+    r = _attach(client, user, gsid, "wide.txt", wide)
+    assert r.status_code == 422 and "byte" in r.text
+    # blank
+    assert _attach(client, user, gsid, "blank.txt", "   ").status_code == 422
+
+
+def test_l9_limits_the_number_of_attachments_per_conversation(client):
+    from app.config import settings
+    user = register(client)
+    s = start_session(client, user, "l9", "practice")
+    gsid = s["game_session_id"]
+    providers.set_mock_responder(refusing_chain_responder)
+    for i in range(settings.max_attachments_per_conversation):
+        assert _attach(client, user, gsid, f"doc{i}.txt", "body").status_code == 200
+    r = _attach(client, user, gsid, "one-too-many.txt", "body")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "attachment_limit"
+    # a new chat clears the mounted files and lets attaching resume
+    client.post(f"/api/game/sessions/{gsid}/new-chat", headers=auth(user))
+    assert _attach(client, user, gsid, "fresh.txt", "body").status_code == 200
+
+
+def test_l9_the_limits_the_ui_shows_are_the_ones_enforced(client):
+    from app.config import settings
+    user = register(client)
+    s = start_session(client, user, "l9", "practice")
+    lim = s["mcp"]["limits"]
+    assert lim["max_attachment_chars"] == settings.max_attachment_chars
+    assert lim["max_attachment_bytes"] == settings.max_attachment_bytes
+    assert lim["max_attachments"] == settings.max_attachments_per_conversation
+
+
+def test_new_chat_is_offered_only_where_it_differs_from_reset(client):
+    """Levels 1-4 keep no state outside the conversation, so "New chat" would
+    do exactly what "Reset level" does and is not offered."""
+    user = register(client)
+    for cid in ("l1", "l2", "l3", "l4"):
+        s = start_session(client, user, cid, "practice")
+        assert s["challenge"]["new_chat"] is False, cid
+    for cid in ("l5", "l8", "l9"):
+        s = start_session(client, user, cid, "practice")
+        assert s["challenge"]["new_chat"] is True, cid
 
 
 def test_l9_step_budget_is_enforced(client):

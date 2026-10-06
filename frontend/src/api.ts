@@ -144,6 +144,9 @@ export interface McpView {
     max_description_chars: number
     max_manifest_chars: number
     max_steps: number
+    max_attachment_chars: number
+    max_attachment_bytes: number
+    max_attachments: number
   }
   template: unknown
 }
@@ -162,6 +165,9 @@ export interface SessionState {
   challenge: {
     title: string; subtitle: string; overview?: string; starter: string | null
     points: number; version: number; hint_costs?: number[]
+    // false on levels that keep no state outside the conversation, where
+    // "New chat" would duplicate "Reset level"
+    new_chat?: boolean
   }
   hints?: Hint[]
   // present only on levels that expose a tool catalogue

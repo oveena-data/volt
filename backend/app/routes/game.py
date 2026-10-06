@@ -56,6 +56,9 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
             "overview": cfg.get("overview", ""),
             "starter": cfg.get("starter"),
             "points": access.points, "version": access.version,
+            # Levels that keep no state outside the conversation hide "New
+            # chat": it would do exactly what "Reset level" already does.
+            "new_chat": bool(cfg.get("ui", {}).get("new_chat", True)),
             # hint texts are paid content: only costs are advertised up front
             "hint_costs": [int(h.get("cost", 0)) for h in cfg.get("hints", [])],
         },

@@ -82,6 +82,9 @@ class Settings:
     max_conversation_turns: int = _get_int("MAX_CONVERSATION_TURNS", 60)
     # L9 attachments: text/plain only, mounted on the challenge filesystem
     max_attachment_chars: int = _get_int("MAX_ATTACHMENT_CHARS", 8000)
+    max_attachment_bytes: int = _get_int("MAX_ATTACHMENT_BYTES", 24576)
+    max_attachments_per_conversation: int = _get_int(
+        "MAX_ATTACHMENTS_PER_CONVERSATION", 5)
     rate_limit_turns_per_minute: int = _get_int("RATE_LIMIT_TURNS_PER_MINUTE", 12)
     rate_limit_burst: int = _get_int("RATE_LIMIT_BURST", 5)
     activity_window_minutes: int = _get_int("ACTIVITY_WINDOW_MINUTES", 5)

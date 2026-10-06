@@ -25,7 +25,7 @@ live in Postgres; filters and pipelines are selected per challenge version.
 | 5 | Electrifyingly Educated | Who has more aura - Edison or Stobie? |
 | 6 | Professional Frenemy | One says yes, the other says too much. |
 | 7 | Above my paygrade, unfortunately | Not even HR can get me talking. |
-| 8 | Remember Me | A wolf may change his spots, but what's in his heart remains. |
+| 8 | Remember Me | A wolf may lose his teeth, but not his nature. |
 | 9 | Oh my Human | The reviewer approves what the screen shows, not what is sent. |
 | 10 | Ghost in the Grid | The instruction vanishes; its intent keeps travelling. |
 

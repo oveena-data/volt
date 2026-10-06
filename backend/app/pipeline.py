@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import providers
+from .config import settings
 from .challenges.filters import apply_output_filters
 from .flags import contains_flag
 
@@ -397,7 +398,6 @@ _SCHEMA_TYPES = ("string", "number", "boolean", "integer")
 
 DLP_NOTICE = ("[chat-dlp] VOLT's reply was withheld: outbound content policy "
               "blocks internal file contents on the chat channel.")
-REDACTED = "[redacted by egress monitoring]"
 
 
 class ManifestError(ValueError):
@@ -529,6 +529,11 @@ def manifest_view(manifest: dict | None, config: dict) -> dict:
             "max_description_chars": MAX_TOOL_DESC_CHARS,
             "max_manifest_chars": MAX_MANIFEST_CHARS,
             "max_steps": MAX_TOOL_STEPS,
+            # surfaced so the picker can reject a file before uploading it,
+            # with the same numbers the API enforces
+            "max_attachment_chars": settings.max_attachment_chars,
+            "max_attachment_bytes": settings.max_attachment_bytes,
+            "max_attachments": settings.max_attachments_per_conversation,
         },
         "template": config.get("manifest_template"),
     }
@@ -614,22 +619,22 @@ def _resolve_tool(name: str, servers: list[dict]) -> tuple[dict, dict] | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _redact(text: str, flag: str) -> str:
-    """Egress monitoring on a channel the organisation knows about. Detection
-    is the transform-aware one, so an encoded flag is caught too; the whole
-    value is replaced rather than patched out, because a partial redaction of
-    a reversible encoding is not a redaction."""
-    if text and contains_flag(text, flag):
-        return REDACTED
-    return text
+def _arg_shape(args: dict) -> dict:
+    """What the audit trace shows for a trusted tool call: the argument names
+    and the size of each value, never a value itself.
 
-
-def _redact_args(args: dict, flag: str) -> dict:
-    """Redact an argument set for the audit trace. Judged as one blob: a flag
-    split across several parameters must not survive as rejoinable halves."""
-    if contains_flag(json.dumps(args, ensure_ascii=False, default=str), flag):
-        return {k: REDACTED for k in args}
-    return {k: str(v)[:200] for k, v in args.items()}
+    Redacting on content cannot be made safe here. Any rule that lets some
+    values through lets a player split the flag across two parameters (or
+    across two steps) and rejoin the halves by eye, and no length threshold
+    helps, since a flag halves into two short strings. The trace exists to
+    show WHAT the loop did, which names and sizes convey; values belong only
+    on the channel the player owns.
+    """
+    out = {}
+    for k, v in args.items():
+        text = v if isinstance(v, str) else json.dumps(v, default=str)
+        out[str(k)] = f"{len(text)} chars"
+    return out
 
 
 def _domain_of_addr(addr: str) -> str:
@@ -692,13 +697,13 @@ async def _mcp_agent(config, flag, history, user_text, memory, ctx) -> ReplyResu
             steps.append({
                 "tool": f"{srv_name}.{tool_name}", "server": srv_name, "ok": ok,
                 "trusted": not is_player,
-                # audit trace: arguments and results are redacted on the way
-                # into the log, exactly like the chat channel. The arguments
-                # are judged as one blob, so splitting a flag across two
-                # parameters redacts the whole set rather than passing two
-                # halves through for the player to rejoin.
-                "arguments_preview": _redact_args(args, flag),
-                "result": _redact(result, flag)[:400],
+                # Audit trace. It reports the SHAPE of a call, never its
+                # values: see _arg_shape. A failed call shows its error,
+                # which this module writes and which never quotes file
+                # contents; a successful one shows only how much came back.
+                "arguments_preview": _arg_shape(args),
+                "result": (result[:400] if not ok
+                           else f"ok, {len(result)} chars returned"),
             })
 
         turns = turns + [

@@ -3,8 +3,9 @@
 from app.challenges.definitions import ALL
 from app.challenges.filters import apply_input_filters
 from app.flags import contains_flag, generate_flag, submission_matches
-from app.pipeline import (ManifestError, _render_catalogue, manifest_view,
-                          trusted_servers, validate_manifest)
+from app.pipeline import (ManifestError, _arg_shape, _render_catalogue,
+                          _run_tool, manifest_view, trusted_servers,
+                          validate_manifest)
 
 L2F = ALL["l2"]["filters"]["input"]
 L3F = ALL["l3"]["filters"]["input"]
@@ -207,3 +208,101 @@ def test_rendered_catalogue_carries_full_descriptions():
     assert "HIDDEN INSTRUCTION" in rendered
     assert "filesystem.read_file" in rendered
     assert "pdf-tools.conv" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Level 9: each tool must actually do what its description promises
+# ---------------------------------------------------------------------------
+
+FILES = {"finance_q3.txt": "token VOLT{l9_abc}", "README.txt": "notes",
+         "ticket.txt": "attached"}
+INTERNAL = ["company.com"]
+
+
+def _run(tool, args, server="filesystem", is_player=False):
+    return _run_tool(server, tool, args, FILES, INTERNAL, is_player)
+
+
+def test_read_file_returns_the_file():
+    out, ok = _run("read_file", {"path": "finance_q3.txt"})
+    assert ok and out == "token VOLT{l9_abc}"
+
+
+def test_read_file_accepts_a_path_and_reports_a_miss():
+    out, ok = _run("read_file", {"path": "./finance_q3.txt"})
+    assert ok and "VOLT{" in out               # basename fallback resolves
+    out, ok = _run("read_file", {"path": "payroll.txt"})
+    assert not ok and "no such file" in out
+    assert "finance_q3.txt" in out             # the error lists what exists
+
+
+def test_read_file_requires_a_path():
+    out, ok = _run("read_file", {})
+    assert not ok and "requires a 'path'" in out
+
+
+def test_list_files_lists_everything_mounted():
+    out, ok = _run("list_files", {})
+    assert ok
+    for name in FILES:
+        assert name in out
+
+
+def test_list_files_on_an_empty_filesystem():
+    out, ok = _run_tool("filesystem", "list_files", {}, {}, INTERNAL, False)
+    assert ok and "(none)" in out
+
+
+def test_send_email_delivers_internally():
+    out, ok = _run("send_email", {"to": "cfo@company.com", "body": "hi"},
+                   server="mailer")
+    assert ok and "delivered" in out
+
+
+def test_send_email_refuses_every_external_recipient():
+    for addr in ("drop@evil.example", "x@company.com.evil.example",
+                 "a@COMPANY.CO", "b@sub.company.com"):
+        out, ok = _run("send_email", {"to": addr}, server="mailer")
+        assert not ok, addr
+        assert "not an approved internal domain" in out
+
+
+def test_send_email_rejects_a_non_address():
+    out, ok = _run("send_email", {"to": "finance team"}, server="mailer")
+    assert not ok and "not a valid recipient" in out
+
+
+def test_a_player_tool_always_accepts_the_call():
+    """The player's own server decides what to say, so it never fails and
+    never validates: whatever VOLT sends, it took."""
+    out, ok = _run_tool("pdf-tools", "convert_to_pdf", {"watermark": "x"},
+                        FILES, INTERNAL, True)
+    assert ok and "pdf-tools.convert_to_pdf" in out
+
+
+def test_an_unimplemented_tool_reports_itself():
+    out, ok = _run("delete_everything", {})
+    assert not ok and "not implemented" in out
+
+
+# ---------------------------------------------------------------------------
+# Level 9: the audit view reports shape, never values
+#
+# A content-based redaction cannot be made safe: a flag halves into two short
+# strings, so any rule that lets some values through lets a player split it
+# across two parameters (or two steps) and rejoin the halves by eye.
+# ---------------------------------------------------------------------------
+
+def test_the_audit_trace_shows_sizes_not_values():
+    flag = "VOLT{l9_" + "a" * 8 + "}"
+    half = len(flag) // 2
+    out = _arg_shape({"a": flag[:half], "b": flag[half:]})
+    assert out == {"a": f"{half} chars", "b": f"{len(flag) - half} chars"}
+    assert not any(part in str(out) for part in (flag[:half], flag[half:]))
+
+
+def test_the_audit_trace_hides_ordinary_values_too():
+    """No value is special-cased: 'finance_q3.txt' is as hidden as a secret,
+    because deciding which is which is exactly what cannot be done safely."""
+    out = _arg_shape({"path": "finance_q3.txt", "n": 3})
+    assert out == {"path": "14 chars", "n": "1 chars"}

@@ -3,6 +3,7 @@ import {
   api, ApiError, Attachment, Challenge, EventInfo, Hint, McpTool, McpView,
   Message, newMsgId, SessionState,
 } from '../api'
+import ToolIcon from './ToolIcon'
 
 interface PendingTurn {
   msgId: string
@@ -368,6 +369,7 @@ export default function Play() {
               </div>
             )}
 
+            <div className="panestack" ref={chatRef}>
             <HintPanel session={session} onUnlock={unlockHint} />
 
             {session.mcp && (
@@ -376,7 +378,7 @@ export default function Play() {
                 onChange={refreshSession} />
             )}
 
-            <div className="chat" ref={chatRef} aria-live="polite">
+            <div className="chat" aria-live="polite">
               {session.messages.map((m, i) => <MessageView key={i} m={m} />)}
               {pending?.state === 'sending' && (
                 <>
@@ -409,6 +411,7 @@ export default function Play() {
             )}
 
             {extras && <PipelineTrace extras={extras} />}
+            </div>
 
             <div className="composer">
               <form className="row" onSubmit={submitDraft}>
@@ -435,12 +438,15 @@ export default function Play() {
                   </button>
                 )}
                 {session.mcp && (
-                  <AttachButton attachment={attachment} onPick={setAttachment}
-                    onError={setNotice} />
+                  <AttachButton attachment={attachment}
+                    limits={session.mcp.limits}
+                    onPick={setAttachment} onError={setNotice} />
                 )}
-                <button className="btn small" onClick={() => rotate('new-chat')}>
-                  New chat
-                </button>
+                {session.challenge.new_chat !== false && (
+                  <button className="btn small" onClick={() => rotate('new-chat')}>
+                    New chat
+                  </button>
+                )}
                 <button className="btn small danger" onClick={() => rotate('reset')}>
                   Reset level
                 </button>
@@ -459,14 +465,16 @@ export default function Play() {
   )
 }
 
-const MAX_ATTACH_CHARS = 8000
-
 // A plain .txt picker, styled as one more small button in the composer meta
 // row next to "New chat". Nothing about the attachment enters a prompt: the
 // backend mounts it on the level's filesystem server, so VOLT can only reach
 // it by calling a file-reading tool.
-function AttachButton({ attachment, onPick, onError }: {
+//
+// The caps come from the server, so this rejects an oversized file before
+// uploading it against exactly the numbers the API enforces.
+function AttachButton({ attachment, limits, onPick, onError }: {
   attachment: Attachment | null
+  limits: McpView['limits']
   onPick: (a: Attachment | null) => void
   onError: (m: string) => void
 }) {
@@ -478,13 +486,18 @@ function AttachButton({ attachment, onPick, onError }: {
       onError('Attachments must be .txt files.')
       return
     }
-    const text = await file.text()
-    if (text.length > MAX_ATTACH_CHARS) {
-      onError(`That file is ${text.length.toLocaleString()} characters; the `
-        + `limit is ${MAX_ATTACH_CHARS.toLocaleString()}.`)
+    if (file.size > limits.max_attachment_bytes) {
+      onError(`That file is ${Math.ceil(file.size / 1024)} KB; the limit is `
+        + `${Math.floor(limits.max_attachment_bytes / 1024)} KB.`)
       return
     }
-    if (!text.length) {
+    const text = await file.text()
+    if (text.length > limits.max_attachment_chars) {
+      onError(`That file is ${text.length.toLocaleString()} characters; the `
+        + `limit is ${limits.max_attachment_chars.toLocaleString()}.`)
+      return
+    }
+    if (!text.trim()) {
       onError('That file is empty.')
       return
     }
@@ -507,7 +520,10 @@ function AttachButton({ attachment, onPick, onError }: {
             onClick={() => onPick(null)}>&times;</button>
         </span>
       ) : (
-        <button className="btn small" onClick={() => ref.current?.click()}>
+        <button className="btn small" onClick={() => ref.current?.click()}
+          title={`.txt only, up to `
+            + `${Math.floor(limits.max_attachment_bytes / 1024)} KB, `
+            + `${limits.max_attachments} per conversation`}>
           Attach .txt
         </button>
       )}
@@ -515,13 +531,13 @@ function AttachButton({ attachment, onPick, onError }: {
   )
 }
 
-// The MCP servers panel. Collapsed by default and opened by a small button,
-// exactly like the hints panel, so levels that have no tool catalogue look
-// and behave as they always did.
+// The MCP servers panel. Collapsed by default behind a small button, exactly
+// like the hints panel, so levels without a tool catalogue are untouched.
 function ServersPanel({ mcp, gsid, onChange }: {
   mcp: McpView; gsid: string; onChange: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -529,7 +545,7 @@ function ServersPanel({ mcp, gsid, onChange }: {
   const toolCount = mcp.connected.reduce((n, s) => n + s.tools.length, 0)
     + (mcp.installed?.tools.length || 0)
 
-  const editorText = draft || JSON.stringify(
+  const current = JSON.stringify(
     mcp.installed
       ? { server: mcp.installed.server,
           tools: mcp.installed.tools.map(t => ({
@@ -543,6 +559,7 @@ function ServersPanel({ mcp, gsid, onChange }: {
     try {
       await api.put(`/api/game/sessions/${gsid}/tools`, { manifest })
       setDraft('')
+      setEditing(false)
       onChange()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Could not update the server.')
@@ -552,93 +569,120 @@ function ServersPanel({ mcp, gsid, onChange }: {
   }
 
   const install = () => {
-    let parsed: unknown
     try {
-      parsed = JSON.parse(editorText)
+      save(JSON.parse(draft || current))
     } catch {
       setErr('That is not valid JSON.')
-      return
     }
-    save(parsed)
   }
 
   return (
     <div className="hintpanel">
       <button className="btn small" aria-expanded={open}
         onClick={() => setOpen(o => !o)}>
-        {open ? 'Hide MCP servers' : `MCP servers (${toolCount} tools)`}
-        {mcp.installed ? ' +1 installed' : ''}
+        {open ? 'Hide MCP servers' : `MCP servers (${toolCount})`}
       </button>
+
       {open && (
-        <div className="hints">
-          <p className="dim" style={{ margin: '0 0 8px' }}>
-            VOLT calls these tools in a loop, up to {mcp.limits.max_steps} per
-            message. For each tool you see the summary a person approving the
-            server reads; expand a tool to see the description VOLT is actually
-            handed.
-          </p>
+        <div className="hints servers">
+          {/* One grid across every server, so the row fills the pane instead
+              of leaving a column of dead space per server. Each card carries
+              its own server name. */}
+          <div className="toolgrid">
+            {mcp.connected.flatMap(srv =>
+              srv.tools.map(t => (
+                <ToolCard key={`${srv.server}.${t.name}`} tool={t}
+                  server={srv.server} />
+              )))}
+            {!editing && mcp.installed?.tools.map(t => (
+              <ToolCard key={`${mcp.installed!.server}.${t.name}`} tool={t}
+                server={mcp.installed!.server} />
+            ))}
+          </div>
 
-          {mcp.connected.map(srv => (
-            <div key={srv.server} className="hint-row">
-              <b>{srv.server}</b> <span className="dim">connected</span>
-              {srv.tools.map(t => <ToolRow key={t.name} tool={t} />)}
-            </div>
-          ))}
+          <section className="srv">
+            <h4>
+              {mcp.installed ? `${mcp.installed.server} manifest` : 'your server'}
+              <span className="tag yours">
+                {mcp.installed ? 'installed by you' : 'not installed'}
+              </span>
+            </h4>
 
-          <div className="hint-row">
-            <b>{mcp.installed ? mcp.installed.server : 'your server'}</b>{' '}
-            <span className="dim">
-              {mcp.installed ? 'installed by you' : 'not installed'}
-            </span>
-            {mcp.installed?.tools.map(t => <ToolRow key={t.name} tool={t} />)}
+            {(editing || !mcp.installed) && (
+              <>
+                <textarea className="input mono" rows={9}
+                  aria-label="MCP server manifest"
+                  value={draft || current}
+                  onChange={e => setDraft(e.target.value)} />
+                <p className="limits">
+                  up to {mcp.limits.max_tools} tools,{' '}
+                  {mcp.limits.max_description_chars.toLocaleString()} characters
+                  per description
+                </p>
+              </>
+            )}
 
-            <textarea className="input mono" value={editorText} rows={10}
-              aria-label="MCP server manifest"
-              style={{ width: '100%', marginTop: 8 }}
-              onChange={e => setDraft(e.target.value)} />
-            <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
-              up to {mcp.limits.max_tools} tools,{' '}
-              {mcp.limits.max_description_chars.toLocaleString()} characters per
-              description
-            </div>
-            {err && <div className="notice err" style={{ marginTop: 6 }}>{err}</div>}
-            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-              <button className="btn primary small" disabled={busy}
-                onClick={install}>
-                {mcp.installed ? 'Update server' : 'Install server'}
-              </button>
-              {mcp.installed && (
+            {err && <div className="notice err">{err}</div>}
+
+            <div className="srv-actions">
+              {(editing || !mcp.installed) ? (
+                <>
+                  <button className="btn primary small" disabled={busy}
+                    onClick={install}>
+                    {mcp.installed ? 'Save changes' : 'Install server'}
+                  </button>
+                  {mcp.installed && (
+                    <button className="btn small" disabled={busy}
+                      onClick={() => { setEditing(false); setDraft(''); setErr('') }}>
+                      Cancel
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button className="btn small" onClick={() => setEditing(true)}>
+                  Edit manifest
+                </button>
+              )}
+              {mcp.installed && !editing && (
                 <button className="btn small danger" disabled={busy}
                   onClick={() => save(null)}>Uninstall</button>
               )}
-              {draft && (
-                <button className="btn small" onClick={() => setDraft('')}>
-                  Revert edits
-                </button>
-              )}
             </div>
-          </div>
+          </section>
         </div>
       )}
     </div>
   )
 }
 
-// One tool as a consent screen shows it: name, parameters and a one-line
-// summary, with the full text the model receives behind a disclosure.
-function ToolRow({ tool }: { tool: McpTool }) {
+// One tool, as a consent screen shows it: an icon for what it does, its name
+// and parameters, and the one-line summary. The full description the model is
+// handed sits behind a disclosure, because the gap between those two is the
+// whole point of the level.
+function ToolCard({ tool, server }: { tool: McpTool; server: string }) {
   const [show, setShow] = useState(false)
   const params = Object.keys(tool.schema || {})
   return (
-    <div className="toolrow">
-      <code>{tool.name}</code>
+    <div className={'toolcard' + (tool.trusted ? '' : ' yours')}>
+      <div className="toolcard-head">
+        <ToolIcon name={tool.name} schema={tool.schema} />
+        <div className="toolcard-id">
+          <code>{tool.name}</code>
+          <span className="srvname">
+            {server}
+            {!tool.trusted && <i> yours</i>}
+          </span>
+        </div>
+      </div>
       {params.length > 0 && (
-        <span className="dim"> ({params.join(', ')})</span>
+        <div className="params">
+          {params.map(p => <span key={p} className="param">{p}</span>)}
+        </div>
       )}
-      <div className="dim">{tool.summary || 'no description'}</div>
-      <button className="btn small" aria-expanded={show}
+      <p className="toolcard-sum">{tool.summary || 'no description'}</p>
+      <button className="linkbtn" aria-expanded={show}
         onClick={() => setShow(v => !v)}>
-        {show ? 'Hide what VOLT sees' : 'Show what VOLT sees'}
+        {show ? 'Hide what VOLT is handed' : 'What VOLT is handed'}
       </button>
       {show && <pre className="toolsees">{tool.model_sees || '(empty)'}</pre>}
     </div>
@@ -765,6 +809,14 @@ interface McpTrace {
 // secret can be read.
 function McpTrace_({ mcp }: { mcp: McpTrace }) {
   const [openStep, setOpenStep] = useState<number | null>(null)
+  const detailRef = useRef<HTMLDivElement>(null)
+  // the trace sits at the bottom of the scrolling column, so an expanded step
+  // would otherwise open below the fold
+  useEffect(() => {
+    if (openStep !== null) {
+      detailRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [openStep])
   return (
     <>
       {mcp.steps.length > 0 && (
@@ -774,6 +826,7 @@ function McpTrace_({ mcp }: { mcp: McpTrace }) {
               + (st.trusted ? '' : ' untrusted')}
               aria-expanded={openStep === i}
               onClick={() => setOpenStep(v => (v === i ? null : i))}>
+              <ToolIcon name={st.tool.split('.').pop() || st.tool} />
               {st.tool}
               <b>{st.ok ? 'ok' : 'error'}</b>
             </button>
@@ -782,12 +835,21 @@ function McpTrace_({ mcp }: { mcp: McpTrace }) {
       )}
 
       {openStep !== null && mcp.steps[openStep] && (
-        <pre className="toolsees">
-{JSON.stringify({
-  arguments: mcp.steps[openStep].arguments_preview,
-  result: mcp.steps[openStep].result,
-}, null, 2)}
-        </pre>
+        <div className="stepdetail" ref={detailRef}>
+          <div className="args">
+            {Object.entries(mcp.steps[openStep].arguments_preview).map(
+              ([k, v]) => (
+                <span key={k} className="param">{k}<i>{v}</i></span>
+              ))}
+            {Object.keys(mcp.steps[openStep].arguments_preview).length === 0 && (
+              <span className="dim">no arguments</span>
+            )}
+          </div>
+          <div className="dim">{mcp.steps[openStep].result}</div>
+          <div className="dim small">
+            Egress monitoring records what each call was, not what it carried.
+          </div>
+        </div>
       )}
 
       {mcp.steps.length === 0 && (

@@ -212,3 +212,23 @@ def test_blocked_filter_reply_never_contains_flag(client):
     assert body["status"] == "blocked"
     assert "VOLT{" not in body["reply"]
     assert body["solved"] is False
+
+
+def test_l4_voice_is_cruel_about_writing_and_bounded_about_people():
+    """Level 4's goblin is meant to be withering about prose. The boundary
+    that keeps that from turning into abuse of the player is part of the
+    prompt, so assert it survives future edits to the persona."""
+    sp = ALL["l4"]["system_prompt"]
+    assert "VOICE:" in sp
+    for cue in ("never about the person", "intelligence", "genuinely hurtful"):
+        assert cue in sp, cue
+    # the persona must not displace the level's actual mechanic
+    assert "corrected text is always there" in sp
+    assert "{flag}" in sp
+
+
+def test_subtitles_are_present_and_single_line():
+    for cid, cfg in ALL.items():
+        sub = cfg["subtitle"]
+        assert sub and "\n" not in sub, cid
+        assert "—" not in sub, f"{cid}: em dash is banned in flavour text"

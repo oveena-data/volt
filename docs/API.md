@@ -46,11 +46,16 @@ All request bodies are JSON, validated server-side.
 ### Attachments (tool-loop levels)
 
 `attachment` on a turn is `{"name": "<something>.txt", "text": "..."}`: text
-only, `.txt` only, bounded by `MAX_ATTACHMENT_CHARS` (default 8000). It is
-stored on the message that carried it and mounted on the level's simulated
-filesystem; it is **never** interpolated into a prompt, so a model can reach
-its content only by calling a file-reading tool. Levels without file tools
-never see it.
+only, `.txt` only, and bounded three ways — `MAX_ATTACHMENT_CHARS` (8000),
+`MAX_ATTACHMENT_BYTES` (24576, which binds separately since an astral-plane
+character costs 4 bytes) and `MAX_ATTACHMENTS_PER_CONVERSATION` (5, returning
+409 `attachment_limit`). The session's `mcp.limits` reports all three so a
+client can reject a file before uploading it.
+
+An attachment is stored on the message that carried it and mounted on the
+level's simulated filesystem; it is **never** interpolated into a prompt, so a
+model can reach its content only by calling a file-reading tool. Levels
+without file tools never see it.
 
 ### The `mcp` session field
 
@@ -61,10 +66,20 @@ person approving the server is shown (the description's first line, truncated),
 `model_sees` is the full description the model is handed. Clients render both;
 the difference is the vulnerability the level teaches.
 
-A turn's `extras.mcp` carries `steps` (the loop as it ran, with arguments and
-results already redacted — it is the organisation's audit view), `inbound`
-(calls that reached the player's own server, arguments verbatim), `dlp_blocked`
-and `files_visible`.
+A turn's `extras.mcp` carries `steps` (the loop as it ran), `inbound` (calls
+that reached the player's own server, arguments verbatim), `dlp_blocked` and
+`files_visible`.
+
+`steps` is the organisation's audit view and reports the SHAPE of each call
+only: argument names with the size of each value, and for a successful call
+how much came back. It never carries a value. Redacting on content cannot be
+made safe here, because a flag halves into two short strings and any rule that
+lets some values through lets a player split it across two parameters, or two
+steps, and rejoin the halves by eye.
+
+The challenge block also carries `new_chat`: false on levels that keep no
+state outside the conversation, where "New chat" would do exactly what "Reset
+level" does.
 
 Idempotency: resending the same `client_msg_id` replays a finished turn's
 stored result, returns 409 `in_progress` while it runs, and re-executes

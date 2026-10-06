@@ -62,7 +62,7 @@ body {
   font: 15px/1.6 Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-#root { min-height: 100%; display: flex; flex-direction: column; }
+#root { height: 100%; display: flex; flex-direction: column; }
 
 h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; font-family: Arial, Helvetica, sans-serif; }
 a { color: var(--accent); text-decoration: none; }
@@ -126,6 +126,8 @@ label.field > span {
   padding: 20px 24px;
   min-height: 0;
 }
+.sidebar { overflow-y: auto; min-height: 0; padding-right: 2px; }
+@media (max-width: 860px) { .sidebar { overflow: visible; } }
 @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
 
 .level-list { display: flex; flex-direction: column; gap: 8px; }
@@ -158,12 +160,22 @@ label.field > span {
 
 .playpane {
   display: flex; flex-direction: column; min-height: 0;
-  height: calc(100vh - 100px);
+  height: 100%;
   border: 1px solid var(--border); border-radius: 14px;
   background: var(--surface);
   overflow: hidden;
 }
 @media (max-width: 860px) { .playpane { height: auto; min-height: 78vh; } }
+
+/* Everything between the briefing and the composer scrolls as one column.
+   Without this the hint and server panels grow unbounded inside a
+   fixed-height flex parent, push the chat to zero height and clip the
+   composer out of the pane entirely. */
+.panestack {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column;
+  overscroll-behavior: contain;
+}
 
 .briefing {
   border-bottom: 1px solid var(--border);
@@ -191,9 +203,10 @@ label.field > span {
 }
 
 .chat {
-  flex: 1; display: flex; flex-direction: column; gap: 14px;
-  padding: 18px 22px; overflow-y: auto; min-height: 0;
+  flex: 1 0 auto; display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 22px; min-height: 120px;
 }
+.chat:empty { min-height: 0; padding: 0; }
 .msg { max-width: 76%; }
 .msg .bubble {
   padding: 10px 14px; border-radius: 12px; white-space: pre-wrap;
@@ -237,7 +250,9 @@ label.field > span {
 .hintpanel { padding: 8px 22px 0; }
 .hints {
   margin-top: 8px; border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 10px 12px; background: #fff;
+  border-radius: var(--radius); padding: 10px 12px;
+  background: var(--surface-2);
+  max-height: 46vh; overflow-y: auto;
 }
 .hints .dim { color: var(--text-dim); }
 .hint-row { padding: 8px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
@@ -273,15 +288,71 @@ label.field > span {
   max-height: 260px; overflow: auto; color: var(--text);
 }
 
-.toolrow {
-  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
-  font-size: 13px;
+/* server sections and the tool cards inside them */
+.servers { padding: 12px 14px; }
+.srv { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.srv h4 {
+  margin: 0 0 9px; font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
 }
-.toolrow code {
-  background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
-  border: 1px solid var(--border);
+.srv .tag {
+  font-weight: 400; font-size: 11px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-faint);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
 }
-.toolrow > .dim { margin: 3px 0 5px; color: var(--text-dim); }
+.srv .tag.yours { color: var(--accent); border-color: var(--accent); }
+.srv-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.srv .limits { margin: 6px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.srv textarea { width: 100%; margin-top: 2px; }
+.srv .notice.err { margin-top: 8px; }
+
+.toolgrid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.toolcard {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; background: var(--surface);
+}
+.toolcard.yours { border-color: var(--accent); background: var(--accent-soft); }
+.toolcard-head { display: flex; align-items: flex-start; gap: 9px; }
+.toolicon { flex: none; color: var(--accent); margin-top: 1px; }
+.toolcard.yours .toolicon { color: var(--accent); }
+.toolcard-id { min-width: 0; }
+.toolcard-id code {
+  display: block; font-size: 13px; font-weight: 700; word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.srvname {
+  display: block; font-size: 11px; color: var(--text-faint); margin-top: 1px;
+}
+.srvname i { font-style: normal; color: var(--accent); font-weight: 700; }
+.params { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.param {
+  font-size: 10.5px; letter-spacing: 0.03em; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px;
+  background: var(--surface-2);
+}
+.toolcard-sum {
+  margin: 7px 0 6px; font-size: 12.5px; line-height: 1.45;
+  color: var(--text-dim);
+}
+.linkbtn {
+  border: none; background: none; padding: 0; font-size: 12px;
+  color: var(--accent); text-decoration: underline;
+}
+
+.stepdetail {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; margin-top: 2px; background: var(--surface-2);
+  font-size: 12.5px;
+}
+.stepdetail .args { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.stepdetail .param i {
+  font-style: normal; color: var(--text-faint); margin-left: 5px;
+}
+.stepdetail .small { font-size: 11.5px; margin-top: 5px; }
+.trace-stage .toolicon { width: 14px; height: 14px; }
 
 textarea.mono, .input.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
