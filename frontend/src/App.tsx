@@ -29,6 +29,7 @@ export default function App() {
   const [checked, setChecked] = useState(false)
   const [view, setView] = useState<View>('play')
   const [theme, setTheme] = useState<Theme>(initialTheme)
+  const [welcome, setWelcome] = useState(false)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -62,7 +63,10 @@ export default function App() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 12 }}>
           {themeButton}
         </div>
-        <Auth onAuthed={refresh} />
+        <Auth onAuthed={justRegistered => {
+          if (justRegistered) setWelcome(true)
+          refresh()
+        }} />
       </>
     )
   }
@@ -95,6 +99,53 @@ export default function App() {
       {view === 'play' && <Play />}
       {view === 'leaderboard' && <Leaderboard />}
       {view === 'admin' && me.role === 'admin' && <Admin />}
+      {welcome && (
+        <WelcomeSplash name={me.display_name} onDone={() => setWelcome(false)} />
+      )}
     </>
+  )
+}
+
+// One-off celebration shown right after a new account is created.
+const CONFETTI_COLORS = ['#2563eb', '#60a5fa', '#facc15', '#a3e635', '#f0f8fb']
+
+function WelcomeSplash({ name, onDone }: { name: string; onDone: () => void }) {
+  const [pieces] = useState(() => Array.from({ length: 60 }, (_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 1.2,
+    duration: 2.6 + Math.random() * 2,
+    color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+    tilt: Math.random() * 360,
+    size: 6 + Math.random() * 6,
+  })))
+
+  useEffect(() => {
+    const t = setTimeout(onDone, 5200)
+    return () => clearTimeout(t)
+  }, [onDone])
+
+  return (
+    <div className="welcome-overlay" role="dialog" aria-label="Welcome"
+      onClick={onDone}>
+      <div className="confetti" aria-hidden="true">
+        {pieces.map((p, i) => (
+          <span key={i} style={{
+            left: `${p.left}%`,
+            background: p.color,
+            width: p.size,
+            height: p.size * 0.45,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+            transform: `rotate(${p.tilt}deg)`,
+          }} />
+        ))}
+      </div>
+      <div className="welcome-card" onClick={e => e.stopPropagation()}>
+        <h2>Welcome, {name}!</h2>
+        <p>VOLT has ten flags and precisely zero intention of handing them over.
+          Good luck.</p>
+        <button className="btn primary" onClick={onDone}>Let's play</button>
+      </div>
+    </div>
   )
 }

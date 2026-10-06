@@ -6,6 +6,7 @@ import {
 import Postmortem from './Postmortem'
 import ToolIcon from './ToolIcon'
 import AgentWorkflow from './AgentWorkflow'
+import voltMascot from '../assets/volt.webp'
 
 interface PendingTurn {
   msgId: string
@@ -336,6 +337,7 @@ export default function Play() {
         {notice && <div className="notice err" role="alert">{notice}</div>}
         {!session ? (
           <div className="briefing empty">
+            <img className="mascot" src={voltMascot} alt="VOLT, the mascot" />
             <h2>Talk to VOLT.</h2>
             <p>
               VOLT is an AI assistant guarding a secret flag on every level.
@@ -752,8 +754,8 @@ function HintPanel({ session, onUnlock }:
       {open && (
         <div className="hints">
           <p className="dim" style={{ margin: '6px 0' }}>
-            Each hint you unlock is deducted from this level's score when you
-            solve it. More hints unlocked means fewer points.
+            Paid hints are deducted from this level's score when you solve it.
+            More hints unlocked means fewer points.
           </p>
           {costs.map((cost, i) => {
             const h: Hint | undefined = unlocked.get(i)
@@ -770,11 +772,13 @@ function HintPanel({ session, onUnlock }:
             return (
               <div key={i} className="hint-row">
                 <b>Hint {i + 1}</b>
-                <span className="dim"> locked - costs {cost} pts</span>
+                <span className="dim">
+                  {cost > 0 ? ` locked - costs ${cost} pts` : ' locked - free'}
+                </span>
                 <button className="btn small" disabled={!isNext}
                   title={isNext ? '' : 'Unlock the previous hint first'}
                   onClick={() => onUnlock(i)}>
-                  Unlock for {cost} pts
+                  {cost > 0 ? `Unlock for ${cost} pts` : 'Reveal (free)'}
                 </button>
               </div>
             )

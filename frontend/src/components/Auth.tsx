@@ -1,7 +1,8 @@
 import { FormEvent, useState } from 'react'
 import { api, ApiError, setToken } from '../api'
 
-export default function Auth({ onAuthed }: { onAuthed: () => void }) {
+export default function Auth({ onAuthed }:
+  { onAuthed: (justRegistered?: boolean) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -19,7 +20,7 @@ export default function Auth({ onAuthed }: { onAuthed: () => void }) {
         : await api.post('/api/auth/register',
             { email, password, display_name: name })
       setToken(data.token)
-      onAuthed()
+      onAuthed(mode === 'register')
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Something went wrong.')
     } finally {

@@ -70,7 +70,7 @@ export default function AgentWorkflow({ wf }: { wf: WorkflowTrace }) {
       {shown && (
         <div className="wf-detail" ref={detailRef}>
           <div className="wf-detail-head">
-            <AgentIcon icon={shown.icon} size={22} />
+            <AgentIcon icon={shown.icon} size={34} />
             <div>
               <b>{shown.name}</b> <span className="dim">{shown.role}</span>
               <div className="dim small">{shown.summary}</div>
