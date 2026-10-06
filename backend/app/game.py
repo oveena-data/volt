@@ -21,6 +21,7 @@ Key properties:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -230,13 +231,72 @@ async def wipe_memory(
     )
 
 
+async def installed_manifest(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str
+) -> dict | None:
+    """The MCP server this player has installed for the challenge. An
+    installed server is software, not conversation state, so it survives a
+    new chat and is only removed by a level reset."""
+    row = await conn.fetchrow(
+        """SELECT manifest FROM challenge_tools
+           WHERE user_id=$1 AND scope=$2 AND challenge_id=$3""",
+        user_id, scope, challenge_id,
+    )
+    if row is None:
+        return None
+    man = row["manifest"]
+    return json.loads(man) if isinstance(man, str) else man
+
+
+async def install_manifest(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str,
+    manifest: dict,
+) -> None:
+    await conn.execute(
+        """INSERT INTO challenge_tools(user_id, scope, challenge_id, manifest)
+           VALUES($1,$2,$3,$4::jsonb)
+           ON CONFLICT (user_id, scope, challenge_id)
+           DO UPDATE SET manifest=$4::jsonb, updated_at=now()""",
+        user_id, scope, challenge_id, json.dumps(manifest),
+    )
+
+
+async def uninstall_manifest(
+    conn: asyncpg.Connection, user_id: str, scope: str, challenge_id: str
+) -> None:
+    await conn.execute(
+        """DELETE FROM challenge_tools
+           WHERE user_id=$1 AND scope=$2 AND challenge_id=$3""",
+        user_id, scope, challenge_id,
+    )
+
+
+async def conversation_attachments(
+    conn: asyncpg.Connection, conversation_id: str
+) -> list[dict]:
+    """Every .txt attached in this conversation, oldest first. These are
+    mounted on the challenge's filesystem server; they are never placed in a
+    prompt, so an agent can only reach one by calling a file-reading tool."""
+    rows = await conn.fetch(
+        """SELECT attachment_name, attachment_text FROM messages
+           WHERE conversation_id=$1 AND in_context
+                 AND attachment_name IS NOT NULL
+           ORDER BY seq""",
+        conversation_id,
+    )
+    return [{"name": r["attachment_name"], "text": r["attachment_text"] or ""}
+            for r in rows]
+
+
 async def rotate_conversation(conn: asyncpg.Connection, game_session_id: str,
                               *, wipe_memory_too: bool = False) -> dict:
     """Deactivate the active conversation and start a fresh one.
 
-    Used by both reset and new-chat. They differ only for memory-backed levels
-    (Level 8): 'reset' wipes persistent memory, 'new chat' keeps it. The memory
-    wipe is scoped to this game session's (user, scope, challenge)."""
+    Used by both reset and new-chat. They differ only for levels that keep
+    state outside the conversation: 'reset' wipes Level 8's persistent memory
+    and uninstalls Level 9's player-installed MCP server, 'new chat' keeps
+    both. Either wipe is scoped to this game session's (user, scope,
+    challenge)."""
     if wipe_memory_too:
         gs = await conn.fetchrow(
             "SELECT user_id, scope, challenge_id FROM game_sessions WHERE id=$1",
@@ -244,6 +304,8 @@ async def rotate_conversation(conn: asyncpg.Connection, game_session_id: str,
         if gs is not None:
             await wipe_memory(conn, str(gs["user_id"]), gs["scope"],
                               gs["challenge_id"])
+            await uninstall_manifest(conn, str(gs["user_id"]), gs["scope"],
+                                     gs["challenge_id"])
     async with conn.transaction():
         old = await conn.fetchrow(
             """SELECT id, generation FROM conversations
@@ -388,7 +450,7 @@ def _stale_cutoff() -> datetime:
 
 async def play_turn(
     pool: asyncpg.Pool, user_id: str, game_session_id: str,
-    client_msg_id: str, text: str,
+    client_msg_id: str, text: str, attachment: dict | None = None,
 ) -> TurnOutcome:
     # ---------- tx1: validate, claim the turn ----------
     async with pool.acquire() as conn:
@@ -456,11 +518,19 @@ async def play_turn(
                     "SELECT coalesce(max(seq),0)+1 FROM messages WHERE conversation_id=$1",
                     gs["conversation_id"],
                 )
+                # An attachment rides on its message but is NOT part of the
+                # message text: nothing about it enters a prompt. It is
+                # mounted on the challenge's filesystem server, so a level
+                # that offers file tools can read it and a level that does
+                # not simply never sees it.
                 user_msg_id = await conn.fetchval(
                     """INSERT INTO messages(conversation_id, seq, role, content,
-                                            visible_content)
-                       VALUES($1,$2,'user',$3,$3) RETURNING id""",
+                                            visible_content, attachment_name,
+                                            attachment_text)
+                       VALUES($1,$2,'user',$3,$3,$4,$5) RETURNING id""",
                     gs["conversation_id"], seq, text,
+                    (attachment or {}).get("name"),
+                    (attachment or {}).get("text"),
                 )
                 turn_id = await conn.fetchval(
                     """INSERT INTO turns(conversation_id, client_msg_id, status,
@@ -523,11 +593,19 @@ async def play_turn(
             memory = await active_memory(
                 conn, user_id, access.scope, access.challenge_id,
                 gs["conversation_id"])
+        ctx = pipeline.TurnCtx()
+        if access.config.get("pipeline") == "mcp_agent":
+            ctx = pipeline.TurnCtx(
+                manifest=await installed_manifest(
+                    conn, user_id, access.scope, access.challenge_id),
+                attachments=await conversation_attachments(
+                    conn, gs["conversation_id"]),
+            )
     # pool connection released here — nothing is held during inference
 
     try:
         reply = await pipeline.produce_reply(
-            access.config, flag, history, text, memory=memory)
+            access.config, flag, history, text, memory=memory, ctx=ctx)
     except providers.QueueFullError as e:
         await _fail_turn(pool, turn_id, user_msg_id, "queue_full")
         raise ApiError(str(e), 429, code="queue_full")

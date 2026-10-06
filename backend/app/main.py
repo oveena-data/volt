@@ -77,6 +77,7 @@ routes = [
     Route("/api/game/sessions/{gsid}/message", game.post_message, methods=["POST"]),
     Route("/api/game/sessions/{gsid}/reset", game.reset_level, methods=["POST"]),
     Route("/api/game/sessions/{gsid}/new-chat", game.new_chat, methods=["POST"]),
+    Route("/api/game/sessions/{gsid}/tools", game.set_tools, methods=["PUT"]),
     Route("/api/game/sessions/{gsid}/hints", game.unlock_hint, methods=["POST"]),
     Route("/api/game/sessions/{gsid}/submit", game.submit_flag, methods=["POST"]),
     Route("/api/me/progress", game.my_progress, methods=["GET"]),

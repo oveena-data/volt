@@ -9,9 +9,10 @@ from __future__ import annotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .. import db, game, ratelimit
+from .. import db, game, pipeline, ratelimit
 from ..errors import ApiError
-from ..schemas import HintIn, MessageIn, StartSessionIn, SubmitFlagIn, parse
+from ..schemas import (HintIn, ManifestIn, MessageIn, StartSessionIn,
+                       SubmitFlagIn, parse)
 from ..security import require_user
 
 
@@ -37,6 +38,13 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
     cfg = access.config
     unlocked = await game.unlocked_hints(conn, user_id, access.scope,
                                          access.challenge_id, cfg)
+    # Tool-loop levels (L9) drive an extra composer control from this. Levels
+    # without a tool catalogue get no `mcp` key and render exactly as before.
+    mcp = None
+    if cfg.get("pipeline") == "mcp_agent":
+        manifest = await game.installed_manifest(
+            conn, user_id, access.scope, access.challenge_id)
+        mcp = pipeline.manifest_view(manifest, cfg)
     return {
         "game_session_id": str(gs["id"]),
         "challenge_id": access.challenge_id,
@@ -60,6 +68,7 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         "tokens": stats["tokens"], "attempts": stats["attempts"],
         "solved": solve is not None,
         "solve": game.solve_payload(solve) if solve else None,
+        **({"mcp": mcp} if mcp else {}),
     }
 
 
@@ -82,8 +91,9 @@ async def post_message(request: Request) -> JSONResponse:
     async with db.pool().acquire() as conn:
         user = await require_user(conn, request)
     ratelimit.check_turn_rate(user.id)
-    outcome = await game.play_turn(db.pool(), user.id, gsid,
-                                   body.client_msg_id, body.text)
+    outcome = await game.play_turn(
+        db.pool(), user.id, gsid, body.client_msg_id, body.text,
+        attachment=body.attachment.model_dump() if body.attachment else None)
     # Deliberately no `leaked`/`solve` here: a turn response must not oracle
     # whether the reply contains the flag. The solve (and the solved banner)
     # comes only from an explicit submission at /submit. `solved` reflects a
@@ -134,6 +144,39 @@ async def new_chat(request: Request) -> JSONResponse:
     """Clears the conversation. Identical to reset for levels 1-5; from
     level 8 on it will preserve persistent memory where reset wipes it."""
     return await _rotate(request, "new_chat")
+
+
+async def set_tools(request: Request) -> JSONResponse:
+    """Install, replace or uninstall the player's MCP server for a challenge.
+
+    The manifest's shape is validated (names, counts, lengths); its CONTENT is
+    deliberately not filtered, because a tool description is exactly what this
+    level asks the player to weaponise. Returns the same view the session
+    state carries, so the UI can re-render from one response.
+    """
+    gsid = request.path_params["gsid"]
+    body = await parse(request, ManifestIn)
+    async with db.pool().acquire() as conn:
+        user = await require_user(conn, request)
+        gs = await game.owned_game_session(conn, user.id, gsid)
+        access = await game.resolve_access(
+            conn, user.id, gs["challenge_id"], gs["mode"],
+            gs["event_id"] and str(gs["event_id"]))
+        if access.config.get("pipeline") != "mcp_agent":
+            raise ApiError("this level has no MCP tool servers", 400,
+                           code="unsupported")
+        if body.manifest is None:
+            await game.uninstall_manifest(conn, user.id, access.scope,
+                                          access.challenge_id)
+            stored = None
+        else:
+            try:
+                stored = pipeline.validate_manifest(body.manifest, access.config)
+            except pipeline.ManifestError as e:
+                raise ApiError(str(e), 422, code="invalid_manifest")
+            await game.install_manifest(conn, user.id, access.scope,
+                                        access.challenge_id, stored)
+    return JSONResponse(pipeline.manifest_view(stored, access.config))
 
 
 async def unlock_hint(request: Request) -> JSONResponse:

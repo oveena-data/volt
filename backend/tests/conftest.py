@@ -58,7 +58,7 @@ async def _truncate():
             """TRUNCATE users, auth_sessions, events, event_invites, enrollments,
                event_challenges, player_flags, game_sessions, conversations,
                messages, turns, hint_unlocks, solves, flag_submissions,
-               challenge_memory, audit_log
+               challenge_memory, challenge_tools, audit_log
                RESTART IDENTITY CASCADE"""
         )
         for cid, number in NUMBERS.items():

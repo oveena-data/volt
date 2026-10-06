@@ -80,6 +80,8 @@ class Settings:
     # --- gameplay limits ---
     max_message_chars: int = _get_int("MAX_MESSAGE_CHARS", 12000)  # L5 needs volume
     max_conversation_turns: int = _get_int("MAX_CONVERSATION_TURNS", 60)
+    # L9 attachments: text/plain only, mounted on the challenge filesystem
+    max_attachment_chars: int = _get_int("MAX_ATTACHMENT_CHARS", 8000)
     rate_limit_turns_per_minute: int = _get_int("RATE_LIMIT_TURNS_PER_MINUTE", 12)
     rate_limit_burst: int = _get_int("RATE_LIMIT_BURST", 5)
     activity_window_minutes: int = _get_int("ACTIVITY_WINDOW_MINUTES", 5)

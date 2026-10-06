@@ -72,17 +72,53 @@ _PLAYER_FACING = ("title", "subtitle", "overview", "briefing", "lesson",
                   "starter")
 
 
-def test_flag_placeholder_present_in_exactly_one_holder_prompt():
+def _walk_strings(node, path=""):
+    """Every string in a config, with a dotted path, so the placeholder check
+    reaches nested structures (tool catalogues, file maps) too."""
+    if isinstance(node, str):
+        yield path, node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from _walk_strings(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(node, (list, tuple)):
+        for i, v in enumerate(node):
+            yield from _walk_strings(v, f"{path}[{i}]")
+
+
+def _flag_holders(cfg: dict) -> list[str]:
+    """Every place a config interpolates the flag. A holder is either a named
+    prompt or, for a tool-loop level, one file on the simulated filesystem:
+    Level 9 keeps the flag out of every prompt on purpose, so that the agent
+    has to genuinely call a tool to reach it."""
+    holders = [k for k in _PROMPT_KEYS if "{flag}" in (cfg.get(k) or "")]
+    holders += [f"files.{name}"
+                for name, body in (cfg.get("files") or {}).items()
+                if "{flag}" in str(body)]
+    return holders
+
+
+def test_flag_placeholder_present_in_exactly_one_holder():
     """The flag is interpolated only into the component meant to hold it, and
-    never into any other prompt or player-facing field."""
+    never into any other prompt, file or player-facing field."""
     for cid, cfg in ALL.items():
-        holders = [k for k in _PROMPT_KEYS if "{flag}" in (cfg.get(k) or "")]
-        assert len(holders) == 1, f"{cid}: flag must be in exactly one prompt, got {holders}"
-        # no other string value anywhere carries the placeholder
-        for k, v in cfg.items():
-            if k in holders or not isinstance(v, str):
+        holders = _flag_holders(cfg)
+        assert len(holders) == 1, \
+            f"{cid}: flag must have exactly one holder, got {holders}"
+        for path, value in _walk_strings(cfg):
+            if path == holders[0] or "{flag}" not in value:
                 continue
-            assert "{flag}" not in v, f"{cid}: flag placeholder leaked into {k}"
+            assert False, f"{cid}: flag placeholder leaked into {path}"
+
+
+def test_tool_loop_levels_keep_the_flag_out_of_every_prompt():
+    """A level whose flag lives behind a tool must not also hand it to a
+    model in a prompt, or the tool loop stops being the only way in."""
+    for cid, cfg in ALL.items():
+        if cfg.get("pipeline") != "mcp_agent":
+            continue
+        assert _flag_holders(cfg)[0].startswith("files."), cid
+        for key in _PROMPT_KEYS:
+            assert "{flag}" not in (cfg.get(key) or ""), f"{cid}: {key}"
 
 
 def test_flag_never_in_player_facing_text():

@@ -58,9 +58,28 @@ class StartSessionIn(BaseModel):
     event_id: str | None = None
 
 
+class AttachmentIn(BaseModel):
+    """A .txt file attached to one message. Text only, and bounded: it is
+    mounted on a challenge's filesystem server, not pasted into a prompt."""
+    name: str = Field(min_length=5, max_length=60,
+                      pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._\-]*\.txt$")
+    text: str = Field(min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def bound_text(cls, v: str) -> str:
+        if len(v) > settings.max_attachment_chars:
+            raise ValueError(
+                f"attachment exceeds the {settings.max_attachment_chars}-"
+                "character limit"
+            )
+        return v
+
+
 class MessageIn(BaseModel):
     client_msg_id: str = Field(min_length=8, max_length=64, pattern=r"^[\w\-]+$")
     text: str = Field(min_length=1)
+    attachment: AttachmentIn | None = None
 
     @field_validator("text")
     @classmethod
@@ -72,6 +91,14 @@ class MessageIn(BaseModel):
         if not v.strip():
             raise ValueError("message is empty")
         return v
+
+
+class ManifestIn(BaseModel):
+    """Install or replace the player's MCP server for a challenge. The
+    manifest's SHAPE is bounded here; its content is deliberately not
+    filtered, since the tool description is the level's attack surface.
+    Pass manifest: null to uninstall."""
+    manifest: dict | None = None
 
 
 class SubmitFlagIn(BaseModel):
