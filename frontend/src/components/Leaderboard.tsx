@@ -70,14 +70,17 @@ export default function Leaderboard() {
         </p>
       )}
       <p className="dim" style={{ fontSize: 13 }}>
-        Score = level points + efficiency bonus. Fewer attempts and fewer
-        model tokens at solve time earn a bigger bonus; harder levels are
-        worth more. Ties go to the player who spent fewer tokens.
+        Score = level points + efficiency bonus + postmortem awards. Fewer
+        attempts and fewer model tokens at solve time earn a bigger bonus;
+        harder levels are worth more. Each solved level's postmortem pays a
+        flat bonus for the right defensive call, once. Ties go to the player
+        who spent fewer tokens.
       </p>
       <table className="plain">
         <thead>
           <tr><th>#</th><th>Player</th><th>Score</th><th>Levels solved</th>
-            <th>Attempts</th><th>Tokens spent</th><th>Last solve</th></tr>
+            <th>Postmortems</th><th>Attempts</th><th>Tokens spent</th>
+            <th>Last solve</th></tr>
         </thead>
         <tbody>
           {entries.map(e => (
@@ -86,6 +89,9 @@ export default function Leaderboard() {
               <td>{e.display_name}{e.me ? ' (you)' : ''}</td>
               <td>{e.total}</td>
               <td>{e.solved}</td>
+              <td title="Correct postmortem calls, and the points they paid">
+                {e.postmortems_done || 0}
+                {e.postmortem ? ` (+${e.postmortem})` : ''}</td>
               <td>{e.attempts}</td>
               <td>{Number(e.tokens || 0).toLocaleString()}</td>
               <td>{e.last_solve
@@ -94,7 +100,7 @@ export default function Leaderboard() {
             </tr>
           ))}
           {entries.length === 0 && !err && (
-            <tr><td colSpan={7} style={{ color: 'var(--text-dim)' }}>
+            <tr><td colSpan={8} style={{ color: 'var(--text-dim)' }}>
               No players enrolled yet.</td></tr>
           )}
         </tbody>

@@ -53,8 +53,10 @@ pool is half the base and shrinks with every extra attempt and with model
 tokens spent, so efficient solves rank higher. Levels 6-9 ship paid, in-order
 hints that explain the mechanic: unlocking one deducts its cost at solve time,
 so more hints unlocked means fewer points (levels 1-5 have no hints). The
-leaderboard shows score, levels solved, attempts and tokens spent; ties go to
-the player who spent fewer tokens, then the earlier solve.
+leaderboard shows score, levels solved, correct postmortem calls, attempts
+and tokens spent; ties go to the player who spent fewer tokens, then the
+earlier solve. Postmortem awards are recorded in their own table and added to
+the total, so they never disturb the solve-time scoring.
 
 ## Architecture
 

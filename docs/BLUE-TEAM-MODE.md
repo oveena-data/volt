@@ -1,9 +1,14 @@
 # Blue Team Mode — design
 
-> **Status: design proposal.** No code in this document is implemented yet.
-> It is the plan for a second play mode alongside the existing attack game,
-> written against the shipped platform (Levels 1–10, `backend/app/game.py`,
-> `backend/app/pipeline.py`, `frontend/src/components/Play.tsx`).
+> **Status: partly implemented.** The **Level Postmortem** has shipped - the
+> per-level debrief with one scored defensive decision, for all ten levels.
+> See `backend/app/postmortem.py`, `backend/app/challenges/postmortems.py`,
+> `frontend/src/components/Postmortem.tsx` and migration
+> `0005_postmortem.sql`, and the summary in §1a below. Everything else here
+> (the hardening bench, detection-rule drills, the ethics gate, the wider
+> module scheme) is still a proposal, written against the shipped platform
+> (Levels 1–10, `backend/app/game.py`, `backend/app/pipeline.py`,
+> `frontend/src/components/Play.tsx`).
 >
 > Not a facilitator document: this file contains no level solutions. It does
 > describe which *defences* each level teaches, so it stays safe to share
@@ -31,6 +36,29 @@ cliff is a lesson they keep.
 
 Name in the UI: **Control Room**. Points are **defence points**. The
 per-player record is the **Defender's Logbook**.
+
+## 1a. What shipped: the Level Postmortem
+
+The first slice took the three beats that matter most and made them one
+button next to "Continue to Level N" on the solve bar, available on every
+level, rather than a whole second mode a player has to opt into.
+
+| Designed here as | Shipped as |
+|---|---|
+| M1–M10 modules of 3–5 drills | one debrief per level, three beats, about a minute |
+| a mix of seven drill kinds | one `mcq`-shaped decision per level, authored with the same discipline: three plausible options, exactly one best, every option's strengths AND limits explained after answering |
+| confidence-weighted scoring with attempt decay | a flat 200 points for a correct first answer; the answer is final, so there is nothing to farm and no negative marking to argue about at an event |
+| defence pool as 25% of base points | 200 per level, 2 000 across the game: about 16% of the 12 700 attack base, still well under one Level 10 solve |
+| `triage` on the player's own transcript | the debrief quotes the player's own winning message and names the techniques it used, detected by authored regexes — deterministic, display-only |
+| a separate Control Room surface | the debrief takes over the play pane while open and returns to the transcript on close |
+| module gating on `solves` | identical: `403 postmortem_locked` on both verbs until the level is solved |
+
+What the shipped slice deliberately does **not** do: no model call anywhere
+(so no grader to harden, no per-player cost, no latency risk), no hardening
+bench, no ethics gate, no recall queue, no confidence declaration. Those
+remain as designed below, and the schema leaves room for them — `postmortems`
+is a separate table joined into the leaderboard, so adding further award
+sources never touches solve-time scoring.
 
 ## 2. Why this fits VOLT specifically
 

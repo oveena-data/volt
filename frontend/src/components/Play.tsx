@@ -3,6 +3,7 @@ import {
   api, ApiError, Attachment, Challenge, EventInfo, Hint, McpTool, McpView,
   Message, newMsgId, SessionState, WorkflowTrace,
 } from '../api'
+import Postmortem from './Postmortem'
 import ToolIcon from './ToolIcon'
 import AgentWorkflow from './AgentWorkflow'
 
@@ -27,6 +28,7 @@ export default function Play() {
   const [draft, setDraft] = useState('')
   const [attachment, setAttachment] = useState<Attachment | null>(null)
   const [flagGuess, setFlagGuess] = useState('')
+  const [pmOpen, setPmOpen] = useState(false)
   const [clockOffset, setClockOffset] = useState(0)
   const chatRef = useRef<HTMLDivElement>(null)
 
@@ -75,6 +77,7 @@ export default function Play() {
   const openLevel = async (c: Challenge) => {
     if (c.locked || !event) return
     setNotice('')
+    setPmOpen(false)
     setPending(null)
     setExtras(null)
     setAttachment(null)
@@ -302,8 +305,14 @@ export default function Play() {
                 <div className="name">{c.title}</div>
                 <div className="pts">
                   {c.solved
-                    ? <span className="done">Solved
-                        {c.net_points != null ? ` for ${c.net_points} pts` : ''}</span>
+                    ? <span className="done"
+                        title={c.postmortem?.points
+                          ? `${c.net_points} from the solve `
+                            + `plus ${c.postmortem.points} from the postmortem`
+                          : undefined}>Solved
+                        {c.net_points != null
+                          ? ` for ${c.net_points + (c.postmortem?.points || 0)} pts`
+                          : ''}</span>
                     : c.locked
                       ? <span className="dim">Solve the previous level to unlock</span>
                       : !c.open_now
@@ -359,10 +368,28 @@ export default function Play() {
                   {session.solve?.bonus
                     ? ` (includes a ${session.solve.bonus} point efficiency bonus)`
                     : ''}.
-                  You can keep experimenting here.
+                  {session.postmortem?.points
+                    ? ` Postmortem: +${session.postmortem.points}.`
+                    : ''}
+                  {' '}You can keep experimenting here.
                 </span>
+                {session.postmortem?.available && (
+                  <button className={'btn small'
+                      + (session.postmortem.answered ? '' : ' primary')}
+                    aria-expanded={pmOpen}
+                    onClick={() => setPmOpen(o => !o)}>
+                    Level Postmortem
+                    {session.postmortem.answered
+                      ? ''
+                      : ` +${session.postmortem.award} pts`}
+                  </button>
+                )}
                 {nextPlayable && nextPlayable.challenge_id !== session.challenge_id && (
-                  <button className="btn primary small"
+                  // an unanswered postmortem is the primary action; once it
+                  // is answered, moving on to the next level is
+                  <button className={'btn small'
+                      + (session.postmortem?.available
+                         && !session.postmortem.answered ? '' : ' primary')}
                     onClick={() => openLevel(nextPlayable)}>
                     Continue to Level {nextPlayable.number}
                   </button>
@@ -370,6 +397,20 @@ export default function Play() {
               </div>
             )}
 
+            {/* The postmortem takes the whole pane while it is open: it is a
+                short, focused debrief, not another panel competing with the
+                transcript. Closing it returns to the chat unchanged. */}
+            {pmOpen && session.solved ? (
+              <Postmortem gsid={session.game_session_id}
+                onClose={() => setPmOpen(false)}
+                onAnswered={() => {
+                  // the award changes the player's score, so re-read both
+                  // the session and the level list from the server
+                  refreshSession()
+                  loadChallenges(event)
+                }} />
+            ) : (
+            <>
             <div className="panestack" ref={chatRef}>
             <HintPanel session={session} onUnlock={unlockHint} />
 
@@ -459,6 +500,8 @@ export default function Play() {
                 </form>
               </div>
             </div>
+            </>
+            )}
           </>
         )}
       </main>

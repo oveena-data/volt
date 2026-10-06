@@ -118,6 +118,12 @@ class HintIn(BaseModel):
     hint_index: int = Field(ge=0, le=10)
 
 
+class PostmortemIn(BaseModel):
+    """The one defensive decision. Which option keys exist is decided by the
+    level's authored options and checked server-side in app/postmortem.py."""
+    choice: str = Field(pattern=r"^[a-z]$")
+
+
 # ---- admin ----
 
 class EventIn(BaseModel):

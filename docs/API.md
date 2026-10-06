@@ -41,7 +41,9 @@ All request bodies are JSON, validated server-side.
 | PUT | /game/sessions/{gsid}/tools | manifest (object, or null to uninstall) | installs/replaces the player's MCP server on a tool-loop level. 422 `invalid_manifest` with the reason; 400 `unsupported` on levels with no tool catalogue. Returns the same `mcp` view the session state carries |
 | POST | /game/sessions/{gsid}/hints | hint_index | in-order unlock; cost deducted only in ranked |
 | POST | /game/sessions/{gsid}/submit | flag | validates against the caller's own flag (transform-aware) |
-| GET | /me/progress | — | own solves across scopes |
+| GET | /game/sessions/{gsid}/postmortem | - | the Level Postmortem. 403 `postmortem_locked` until the level is SOLVED; option verdicts, notes, the answer key and the fix are withheld until an answer is recorded |
+| POST | /game/sessions/{gsid}/postmortem | choice | records the one defensive decision and awards 200 points if correct. The answer is final: a repeat post replays the stored result. 422 for a choice outside the level's options |
+| GET | /me/progress | — | own solves and postmortem answers across scopes |
 
 ### Attachments (tool-loop levels)
 

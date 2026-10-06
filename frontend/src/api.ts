@@ -88,6 +88,7 @@ export interface Challenge {
   solved: boolean
   solved_at: string | null
   net_points?: number | null
+  postmortem?: PostmortemStatus
 }
 
 export interface EventInfo {
@@ -111,6 +112,53 @@ export interface Message {
   role: 'user' | 'assistant' | 'filter'
   text: string
   at: string
+}
+
+// ---- Level Postmortem ----
+// `PostmortemStatus` is the button's state, carried in the session payload
+// and the challenge list. The debrief itself is a separate GET, gated on the
+// solve, so no part of it reaches the page before the level is beaten.
+
+export interface PostmortemStatus {
+  available: boolean
+  answered: boolean
+  correct: boolean | null
+  points: number
+  award: number
+}
+
+export interface PostmortemOption {
+  key: string
+  label: string
+  // present only once an answer is recorded
+  verdict?: 'best' | 'partial' | 'weak'
+  note?: string
+}
+
+export interface PostmortemDebrief {
+  challenge_id: string
+  number: number
+  title: string
+  headline: string
+  breach: string
+  standards: { id: string; name: string; note?: string }[]
+  evidence: {
+    text: string; truncated: boolean; length: number
+    at: string; winning: boolean; signals: string[]
+  } | null
+  question: { stem: string; options: PostmortemOption[] }
+  award: number
+  answered: boolean
+  choice: string | null
+  correct: boolean | null
+  points: number
+  answer_key?: string
+  fix?: {
+    where: string
+    before_label: string; before: string
+    after_label: string; after: string
+    why: string
+  }
 }
 
 export interface Hint {
@@ -170,6 +218,8 @@ export interface SessionState {
     new_chat?: boolean
   }
   hints?: Hint[]
+  // present on every level that ships a postmortem
+  postmortem?: PostmortemStatus
   // present only on levels that expose a tool catalogue
   mcp?: McpView
   messages: Message[]

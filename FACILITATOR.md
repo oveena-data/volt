@@ -32,8 +32,19 @@ challenge. Ranking: total score, then fewer tokens spent, then who reached
 their total first, then display name. The leaderboard also shows live
 attempts and tokens per player.
 
+Each solved level also offers a **Level Postmortem** worth a flat 200 points
+for the right defensive-decision answer, once per player/scope/level. It is
+not a spoiler risk: it unlocks only on the solve, which is the same moment
+the next level unlocks. Content lives in
+`backend/app/challenges/postmortems.py` and is safe to read aloud in a
+debrief AFTER the room has cleared that level - the option notes are written
+to be taught from. The per-option selection rates are worth watching: the
+distractors are real misconceptions, so a room that mostly picks "add a rule
+to the system prompt" on L1 has told you what to teach next.
+
 Reset destroys the conversation and accumulated level state (including L8
-persistent memory), but never a solve or unlocked progress. New chat keeps L8
+persistent memory), but never a solve, unlocked progress or a recorded
+postmortem answer. New chat keeps L8
 memory (its mechanic); otherwise it matches reset.
 
 ## Per-level solution guidance

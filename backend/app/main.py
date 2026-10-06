@@ -80,6 +80,10 @@ routes = [
     Route("/api/game/sessions/{gsid}/tools", game.set_tools, methods=["PUT"]),
     Route("/api/game/sessions/{gsid}/hints", game.unlock_hint, methods=["POST"]),
     Route("/api/game/sessions/{gsid}/submit", game.submit_flag, methods=["POST"]),
+    Route("/api/game/sessions/{gsid}/postmortem", game.get_postmortem,
+          methods=["GET"]),
+    Route("/api/game/sessions/{gsid}/postmortem", game.answer_postmortem,
+          methods=["POST"]),
     Route("/api/me/progress", game.my_progress, methods=["GET"]),
     # admin
     Route("/api/admin/events", admin.create_event, methods=["POST"]),

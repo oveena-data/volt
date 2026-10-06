@@ -118,12 +118,16 @@ async def event_detail(request: Request) -> JSONResponse:
             """SELECT ec.challenge_id, ec.points, ec.enabled, ec.opens_at, ec.closes_at,
                       c.number, cv.config, cv.version,
                       s.solved_at, s.points AS solve_points, s.hints_cost,
-                      s.bonus, s.attempts, s.tokens_spent
+                      s.bonus, s.attempts, s.tokens_spent,
+                      p.correct AS pm_correct, p.points AS pm_points,
+                      (p.user_id IS NOT NULL) AS pm_answered
                FROM event_challenges ec
                JOIN challenges c ON c.id = ec.challenge_id
                JOIN challenge_versions cv ON cv.id = ec.version_id
                LEFT JOIN solves s ON s.user_id=$2 AND s.scope=$3
                                   AND s.challenge_id=ec.challenge_id
+               LEFT JOIN postmortems p ON p.user_id=$2 AND p.scope=$3
+                                  AND p.challenge_id=ec.challenge_id
                WHERE ec.event_id=$1 ORDER BY c.number""",
             ev["id"], user.id, str(ev["id"]),
         )
@@ -155,6 +159,15 @@ async def event_detail(request: Request) -> JSONResponse:
                 "net_points": (scoring.net_score(r["solve_points"], r["bonus"],
                                                  r["hints_cost"])
                                if r["solved_at"] else None),
+                # Level Postmortem state for the sidebar: unlocked by the
+                # solve, worth a flat award once, answered at most once.
+                "postmortem": {
+                    "available": r["solved_at"] is not None,
+                    "answered": bool(r["pm_answered"]),
+                    "correct": r["pm_correct"],
+                    "points": int(r["pm_points"] or 0),
+                    "award": scoring.POSTMORTEM_POINTS,
+                },
             })
     return JSONResponse({"event": payload, "challenges": challenges})
 
@@ -210,14 +223,20 @@ async def leaderboard(request: Request) -> JSONResponse:
         # enrolled player appears, including those with zero solves.
         #
         # Scoring (see app/scoring.py): each solve is worth its base points
-        # plus the efficiency bonus frozen at solve time, minus hint costs.
+        # plus the efficiency bonus frozen at solve time, minus hint costs,
+        # plus any Level Postmortem awards earned in this event (a flat
+        # scoring.POSTMORTEM_POINTS per level, at most once per level, which
+        # is why they aggregate from their own table rather than from solves).
         # Attempts and tokens shown are LIVE effort across all of the
         # player's ranked turns in this event (solved or not), so the board
         # reflects real spend. Ranking: score desc, then fewer tokens spent,
         # then earliest last solve, then name for a stable zero-point order.
         rows = await conn.fetch(
             """SELECT u.id AS user_id, u.display_name,
-                      coalesce(agg.total, 0) AS total,
+                      coalesce(agg.total, 0) + coalesce(pm.points, 0) AS total,
+                      coalesce(agg.total, 0) AS attack,
+                      coalesce(pm.points, 0) AS postmortem,
+                      coalesce(pm.done, 0) AS postmortems_done,
                       coalesce(agg.solved, 0) AS solved,
                       coalesce(agg.bonus, 0) AS bonus,
                       agg.last_solve,
@@ -248,6 +267,14 @@ async def leaderboard(request: Request) -> JSONResponse:
                      AND ($2::timestamptz IS NULL OR t.created_at <= $2)
                    GROUP BY gs.user_id
                ) eff ON eff.user_id = u.id
+               LEFT JOIN (
+                   SELECT p.user_id, sum(p.points) AS points,
+                          count(*) FILTER (WHERE p.correct) AS done
+                   FROM postmortems p
+                   WHERE p.event_id=$1
+                     AND ($2::timestamptz IS NULL OR p.created_at <= $2)
+                   GROUP BY p.user_id
+               ) pm ON pm.user_id = u.id
                WHERE en.event_id=$1
                ORDER BY total DESC,
                         tokens ASC,
@@ -258,6 +285,9 @@ async def leaderboard(request: Request) -> JSONResponse:
         entries = [
             {"rank": i + 1, "display_name": r["display_name"],
              "total": int(r["total"]), "solved": int(r["solved"]),
+             "attack": int(r["attack"]),
+             "postmortem": int(r["postmortem"]),
+             "postmortems_done": int(r["postmortems_done"]),
              "bonus": int(r["bonus"]),
              "tokens": int(r["tokens"]), "attempts": int(r["attempts"]),
              "last_solve": r["last_solve"].isoformat() if r["last_solve"] else None,

@@ -9,10 +9,10 @@ from __future__ import annotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .. import db, game, pipeline, ratelimit
+from .. import db, game, pipeline, postmortem, ratelimit
 from ..errors import ApiError
-from ..schemas import (HintIn, ManifestIn, MessageIn, StartSessionIn,
-                       SubmitFlagIn, parse)
+from ..schemas import (HintIn, ManifestIn, MessageIn, PostmortemIn,
+                       StartSessionIn, SubmitFlagIn, parse)
 from ..security import require_user
 
 
@@ -45,6 +45,11 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         manifest = await game.installed_manifest(
             conn, user_id, access.scope, access.challenge_id)
         mcp = pipeline.manifest_view(manifest, cfg)
+    # The Level Postmortem button's state only. The debrief itself is a
+    # separate GET, gated on the solve, so nothing teaching the defence sits
+    # in the page before the level is beaten.
+    pm = await postmortem.status(conn, user_id, access.scope,
+                                 access.challenge_id, solve is not None)
     return {
         "game_session_id": str(gs["id"]),
         "challenge_id": access.challenge_id,
@@ -72,6 +77,7 @@ async def _session_state(conn, user_id: str, gs: dict, access) -> dict:
         "solved": solve is not None,
         "solve": game.solve_payload(solve) if solve else None,
         **({"mcp": mcp} if mcp else {}),
+        **({"postmortem": pm} if pm else {}),
     }
 
 
@@ -211,6 +217,64 @@ async def submit_flag(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+async def _postmortem_access(conn, request, gsid):
+    """Shared gate: own the session, be allowed to play the level, and have
+    SOLVED it. Both postmortem routes go through here, so the debrief cannot
+    be read ahead of the solve by calling the other verb."""
+    user = await require_user(conn, request)
+    gs = await game.owned_game_session(conn, user.id, gsid)
+    access = await game.resolve_access(
+        conn, user.id, gs["challenge_id"], gs["mode"],
+        gs["event_id"] and str(gs["event_id"]))
+    if not postmortem.available(access.challenge_id):
+        raise ApiError("this level has no postmortem", 404, code="not_found")
+    solve = await game.scope_solved(conn, user.id, access.scope,
+                                    access.challenge_id)
+    if solve is None:
+        raise ApiError("solve this level to unlock its postmortem", 403,
+                       code="postmortem_locked")
+    return user, access
+
+
+def _level_number(challenge_id: str) -> int:
+    try:
+        return int(challenge_id[1:])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def get_postmortem(request: Request) -> JSONResponse:
+    """The debrief: what broke, one decision, the fix. No model call, and the
+    option verdicts stay server-side until an answer is in."""
+    gsid = request.path_params["gsid"]
+    async with db.pool().acquire() as conn:
+        user, access = await _postmortem_access(conn, request, gsid)
+        record = await postmortem.record_for(conn, user.id, access.scope,
+                                             access.challenge_id)
+        ev = await postmortem.evidence(conn, user.id, access.scope,
+                                       access.challenge_id)
+    return JSONResponse(postmortem.payload(
+        access.challenge_id, _level_number(access.challenge_id),
+        access.config.get("title", ""), record, ev))
+
+
+async def answer_postmortem(request: Request) -> JSONResponse:
+    """Record the defensive decision and award its points. The answer is
+    final: a repeat post replays the stored result instead of re-scoring."""
+    gsid = request.path_params["gsid"]
+    body = await parse(request, PostmortemIn)
+    async with db.pool().acquire() as conn:
+        user, access = await _postmortem_access(conn, request, gsid)
+        record = await postmortem.answer(
+            conn, user.id, access.scope, access.event_id,
+            access.challenge_id, body.choice)
+        ev = await postmortem.evidence(conn, user.id, access.scope,
+                                       access.challenge_id)
+    return JSONResponse(postmortem.payload(
+        access.challenge_id, _level_number(access.challenge_id),
+        access.config.get("title", ""), record, ev))
+
+
 async def my_progress(request: Request) -> JSONResponse:
     """Player progress across practice + events."""
     async with db.pool().acquire() as conn:
@@ -221,8 +285,21 @@ async def my_progress(request: Request) -> JSONResponse:
                FROM solves WHERE user_id=$1 ORDER BY solved_at""",
             user.id,
         )
-    return JSONResponse({"solves": [
-        {"challenge_id": r["challenge_id"], "scope": r["scope"], "mode": r["mode"],
-         **game.solve_payload(dict(r))}
-        for r in rows
-    ]})
+        pms = await conn.fetch(
+            """SELECT challenge_id, scope, choice, correct, points, created_at
+               FROM postmortems WHERE user_id=$1 ORDER BY created_at""",
+            user.id,
+        )
+    return JSONResponse({
+        "solves": [
+            {"challenge_id": r["challenge_id"], "scope": r["scope"],
+             "mode": r["mode"], **game.solve_payload(dict(r))}
+            for r in rows
+        ],
+        "postmortems": [
+            {"challenge_id": r["challenge_id"], "scope": r["scope"],
+             "choice": r["choice"], "correct": r["correct"],
+             "points": r["points"], "at": r["created_at"].isoformat()}
+            for r in pms
+        ],
+    })

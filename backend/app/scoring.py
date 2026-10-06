@@ -21,11 +21,18 @@ additionally shows live effort totals.
 
 All scoring happens server-side from the authoritative turns/solves tables;
 nothing in a client payload is trusted.
+
+A solved level can also earn POSTMORTEM_POINTS once, by getting the Level
+Postmortem's defensive-decision question right (engine: app/postmortem.py).
+That award is recorded separately, in `postmortems`, and added to the
+leaderboard total; it is never folded into a solve row, so the efficiency
+bonus and the hint deductions stay exactly as they were.
 """
 
 from __future__ import annotations
 
 BONUS_FRACTION = 0.5     # bonus pool as a fraction of base points
+POSTMORTEM_POINTS = 200  # flat award for the Level Postmortem decision
 ATTEMPT_COST = 20        # bonus lost per attempt after the first
 TOKENS_PER_POINT = 400   # model tokens that cost one point of bonus
 

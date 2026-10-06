@@ -38,7 +38,8 @@ player text
 ## Scoring
 
 Score per solve = base points + efficiency bonus - hint deductions, floored
-at zero (engine: `backend/app/scoring.py`).
+at zero (engine: `backend/app/scoring.py`), plus a flat postmortem award per
+level where the player gets the defensive-decision question right.
 
 - The solve is recorded only on an explicit flag submission. Extracting the
   flag into the chat and claiming the win are two deliberate player actions,
@@ -54,6 +55,18 @@ at zero (engine: `backend/app/scoring.py`).
   explain the mechanic. Unlocking one deducts its cost at solve time, so more
   hints unlocked means fewer points. Costs are shown up front; hint text is
   withheld until unlocked. Levels 1-5 have no hints.
+- **Level Postmortem** (`backend/app/postmortem.py`, content in
+  `backend/app/challenges/postmortems.py`): solving a level unlocks a short
+  debrief - what broke and how OWASP/ATLAS/NIST/CWE classify it, quoting the
+  player's own winning message; one defensive-decision question worth a flat
+  200 points; and a before/after of the fix, revealed by answering. No model
+  call: every word is authored, so it costs nothing per player and nothing
+  the player typed can steer it. The answer is final (one row per
+  player/scope/challenge), the award is paid at most once, and the award is
+  added to the leaderboard total without touching the solve row, so the
+  efficiency bonus and hint deductions are unchanged. Locked until the level
+  is solved, which is also when the next level unlocks - so it can never
+  spoil an unsolved level or undercut the paid hints on levels 6-9.
 - One ranked solve per player/event/challenge, enforced by a unique
   constraint in the same transaction that captures hint costs, attempts,
   tokens and the bonus.
